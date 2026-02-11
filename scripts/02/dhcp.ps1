@@ -174,8 +174,14 @@ function Configurar-DHCP {
 
     $startIP = Solicitar-IP -Prompt "ip inicial" -Default "192.168.100.50"
     $endIP   = Solicitar-IP -Prompt "ip final"   -Default "192.168.100.150"
-    $gateway = Solicitar-IP -Prompt "gateway"     -Default "192.168.100.1"
-    $dns     = Solicitar-IP -Prompt "dns"         -Default "192.168.100.10"
+
+    # defaults dinamicos basados en la subred del rango
+    $prefijo = Obtener-Prefijo -IP $startIP
+    $gwDefault  = "$prefijo.1"
+    $dnsDefault = "$prefijo.1"
+
+    $gateway = Solicitar-IP -Prompt "gateway"     -Default $gwDefault
+    $dns     = Solicitar-IP -Prompt "dns"         -Default $dnsDefault
 
     $lease = Read-Host "lease en segundos [600]"
     if ([string]::IsNullOrWhiteSpace($lease)) { $lease = '600' }
