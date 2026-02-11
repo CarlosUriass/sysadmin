@@ -24,7 +24,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$IFACE      = 'Ethernet'
+$IFACE      = 'Ethernet 2'          # interfaz 2 = red interna VMs (no tocar Ethernet 1 = bridged/internet)
 $SCOPE_MASK = '255.255.255.0'
 $PREFIX_LEN = 24
 
