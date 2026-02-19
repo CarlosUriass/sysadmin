@@ -125,7 +125,6 @@ configure_hardening() {
     log_info "Aplicando Hardening a BIND9 (named.conf.options)..."
     cp "$CONF_OPTIONS" "${CONF_OPTIONS}.bak.$(date +%F)" 2>/dev/null || true
     
-    # Configurar BIND9 como autoritativo estricto
     cat <<EOF > "$CONF_OPTIONS"
 acl "trusted" {
     127.0.0.0/8;
@@ -134,7 +133,12 @@ acl "trusted" {
 
 options {
     directory "/var/cache/bind";
-    recursion no;          // Solo autoritativo
+    recursion yes;            // Permitir que la maquina navegue a internet
+    allow-recursion { trusted; };
+    forwarders {
+        8.8.8.8;
+        1.1.1.1;
+    };
     allow-transfer { none; }; // Evitar AXFR leaks
     allow-update { none; };   // Sin updates dinámicos
     allow-query { any; };
@@ -143,7 +147,7 @@ options {
     auth-nxdomain no;    
 };
 EOF
-    log_ok "Hardening de options aplicado."
+    log_ok "configuracion de options aplicada."
 }
 
 inject_named_local() {
