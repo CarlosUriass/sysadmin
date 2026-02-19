@@ -61,9 +61,11 @@ validate_ipv4() {
 check_port_53() {
     if command -v ss &>/dev/null; then
         if ss -tulpn | grep -q ":53 "; then
-            # Si el proceso que lo usa es named, está bien, solo lo reiniciaremos.
-            if ! ss -tulpn | grep ":53 " | grep -q "named"; then
-                log_error "El puerto 53 TCP/UDP está reservado por otro proceso."
+            # Si es named está bien. systemd-resolved típicamente usa 127.0.0.53 y puede coexistir.
+            if ! ss -tulpn | grep ":53 " | grep -qE "named|systemd-resolve"; then
+                log_error "El puerto 53 TCP/UDP está reservado por otro proceso conflictivo."
+            elif ss -tulpn | grep ":53 " | grep -q "systemd-resolve"; then
+                log_warn "systemd-resolved detectado en el puerto 53 (usualmente 127.0.0.53). BIND9 coexistirá en otras interfaces."
             fi
         fi
     fi
