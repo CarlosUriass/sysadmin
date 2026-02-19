@@ -161,19 +161,23 @@ try {
 }
 
 # ------------------------------------------------------------------------------
-# 6. Forzar Resolución Local y Flush de Caché
+# 6. Forzar Resolución Local y Flush de Caché Profundo
 # ------------------------------------------------------------------------------
 try {
-    Write-Log "forzando localhost como dns" "info"
-    $PrimaryAdapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false } | Select-Object -First 1
-    if ($PrimaryAdapter) {
-        Set-DnsClientServerAddress -InterfaceAlias $PrimaryAdapter.Name -ServerAddresses ("127.0.0.1", "8.8.8.8") -ErrorAction Stop
-        Write-Log "red modificada a 127.0.0.1" "ok"
+    Write-Log "forzando localhost como dns en todos los adaptadores" "info"
+    $ActiveAdapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+    foreach ($Adapter in $ActiveAdapters) {
+        Set-DnsClientServerAddress -InterfaceAlias $Adapter.Name -ServerAddresses ("127.0.0.1") -ErrorAction SilentlyContinue
     }
+    Write-Log "red modificada a 127.0.0.1" "ok"
 } catch {
     Write-Log "fallo el loopback dns" "alerta"
 }
 
+Write-Log "limpiando cache de dns y netbios para que el ping sirva..." "info"
+ipconfig /flushdns | Out-Null
+nbtstat -R | Out-Null
+nbtstat -RR | Out-Null
 Clear-DnsClientCache
 Restart-Service "DNS" -ErrorAction SilentlyContinue
 
