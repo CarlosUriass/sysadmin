@@ -9,7 +9,7 @@
 # ------------------------------------------------------------------------------
 set -euo pipefail
 
-# Variables Globales (pueden ser override via CLI param o prompts interactivos)
+# Variables Globales
 DOMAIN="reprobados.com"
 IP_CLIENTE=""
 IFACE=""
@@ -33,14 +33,14 @@ ZONE_DIR="/var/cache/bind"
 ZONE_FILE="${ZONE_DIR}/db.${DOMAIN}"
 
 # ------------------------------------------------------------------------------
-# 2. Funciones Base: Logging, Manejo de Errores y Validaciones
+# 2. metodos base
 # ------------------------------------------------------------------------------
-log_info() { echo -e "[\e[34mINFO\e[0m] $1"; echo "[$TIMESTAMP] [INFO] $1" >> "$LOG_FILE"; }
-log_ok() { echo -e "[\e[32m OK \e[0m] $1"; echo "[$TIMESTAMP] [ OK ] $1" >> "$LOG_FILE"; }
-log_warn() { echo -e "[\e[33mWARN\e[0m] $1"; echo "[$TIMESTAMP] [WARN] $1" >> "$LOG_FILE"; }
-log_error() { echo -e "[\e[31mFAIL\e[0m] $1" >&2; echo "[$TIMESTAMP] [FAIL] $1" >> "$LOG_FILE"; exit 1; }
+log_info() { echo "info: $1"; echo "$(date) - info: $1" >> "$LOG_FILE"; }
+log_ok() { echo "ok: $1"; echo "$(date) - ok: $1" >> "$LOG_FILE"; }
+log_warn() { echo "alerta: $1"; echo "$(date) - alerta: $1" >> "$LOG_FILE"; }
+log_error() { echo "error: $1" >&2; echo "$(date) - error: $1" >> "$LOG_FILE"; exit 1; }
 
-trap 'log_error "Ocurrió un error inesperado en la línea $LINENO. Ejecución abortada."' ERR
+trap 'log_error "fallo en linea $LINENO. abortando."' ERR
 
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
@@ -255,25 +255,23 @@ EOF
 }
 
 self_diagnostic() {
-    echo -e "\n============================================="
-    echo " CHECKLIST DE SELF-DIAGNOSTIC - BIND9"
-    echo "============================================="
-    printf "%-30s | %-12s\n" "PRUEBA" "ESTADO"
-    echo "------------------------------------------------"
+    echo ""
+    echo "--- checklist ---"
     
-    # 1. State
-    if systemctl is-active --quiet bind9; then printf "%-30s | \e[32m%-12s\e[0m\n" "Estado del Servicio BIND9" "ACTIVO"; else printf "%-30s | \e[31m%-12s\e[0m\n" "Estado del Servicio BIND9" "FALLO"; fi
+    if systemctl is-active --quiet bind9; then echo "bind9: ok"; else echo "bind9: fail"; fi
+    if ss -lntu | grep -q ":53 "; then echo "puerto 53: ok"; else echo "puerto 53: fail"; fi
     
-    # 2. Port Listen
-    if ss -lntu | grep -q ":53 "; then printf "%-30s | \e[32m%-12s\e[0m\n" "Puerto 53 Listen" "ACTIVO"; else printf "%-30s | \e[31m%-12s\e[0m\n" "Puerto 53 Listen" "FALLO"; fi
-    
-    # 3. DNS Lookup
     if nslookup -timeout=2 "$DOMAIN" 127.0.0.1 | grep -q 'Address:'; then
-       printf "%-30s | \e[32m%-12s\e[0m\n" "Lookup $DOMAIN" "OK"; else printf "%-30s | \e[31m%-12s\e[0m\n" "Lookup $DOMAIN" "FALLO"; fi
-    if nslookup -timeout=2 "www.$DOMAIN" 127.0.0.1 | grep -q 'name ='; then
-       printf "%-30s | \e[32m%-12s\e[0m\n" "Lookup www.$DOMAIN" "OK"; else printf "%-30s | \e[31m%-12s\e[0m\n" "Lookup www.$DOMAIN" "FALLO"; fi
+       echo "nslookup $DOMAIN: ok"
+    else 
+       echo "nslookup $DOMAIN: fail"
+    fi
     
-    echo "============================================="
+    if nslookup -timeout=2 "www.$DOMAIN" 127.0.0.1 | grep -q 'name ='; then
+       echo "nslookup www.$DOMAIN: ok"
+    else 
+       echo "nslookup www.$DOMAIN: fail"
+    fi
 }
 
 # ------------------------------------------------------------------------------
