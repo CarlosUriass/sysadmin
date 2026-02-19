@@ -25,8 +25,8 @@ $LogPath = "$env:TEMP\dns_setup_enterprise.log"
 Function Write-Log {
     param([string]$Message, [string]$Level="info")
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $fmt = "$timestamp - $Level: $Message"
-    Write-Host "$Level: $Message"
+    $fmt = "$timestamp - $($Level): $Message"
+    Write-Host "$($Level): $Message"
     Add-Content -Path $LogPath -Value $fmt
 }
 
@@ -160,8 +160,8 @@ Write-Host "--- checklist ---"
 
 function Test-Check {
     param([string]$name, [bool]$eval)
-    if ($eval) { Write-Host "$name: ok" }
-    else       { Write-Host "$name: fail" }
+    if ($eval) { Write-Host "$($name): ok" }
+    else       { Write-Host "$($name): fail" }
 }
 
 $serviceOk = (Get-Service DNS).Status -eq 'Running'
