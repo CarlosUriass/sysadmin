@@ -9,8 +9,33 @@ Implementa infraestructura crítica as-code. Totalmente idempotente, genera logs
 param (
     [Parameter(Mandatory=$false, ParameterSetName='CLI')]
     [ValidatePattern('^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')]
-    [string]$TargetClientIP
+    [string]$TargetClientIP,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$Help,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$Purge
 )
+
+if ($Help) {
+    Write-Host "uso:"
+    Write-Host "  .\setup_dns_windows.ps1 [opciones]"
+    Write-Host ""
+    Write-Host "opciones:"
+    Write-Host "  -TargetClientIP <ip>   asigna directamente la ip objetivo del cliente."
+    Write-Host "  -Purge                 elimina el rol de servidor dns, la zona y configuraciones."
+    Write-Host "  -Help                  muestra este mensaje de ayuda."
+    exit 0
+}
+
+if ($Purge) {
+    Write-Host "iniciando purga total del servidor dns..." -ForegroundColor Yellow
+    Remove-DnsServerZone -Name "reprobados.com" -Force -ErrorAction SilentlyContinue
+    Uninstall-WindowsFeature -Name DNS -Remove | Out-Null
+    Write-Host "dns desinstalado y configuraciones removidas." -ForegroundColor Green
+    exit 0
+}
 
 # ------------------------------------------------------------------------------
 # 1. Configuración Inicial y Strict Mode

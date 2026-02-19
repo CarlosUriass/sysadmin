@@ -292,8 +292,32 @@ setup_firewall
 # Recolección Argumentos UI/Interactivo 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        -ip) IP_CLIENTE="$2"; shift ;;
-        *) log_warn "Parámetro desconocido: $1" ;;
+        -h|--help)
+            echo "uso:"
+            echo "  sudo ./setup_dns_linux.sh [opciones]"
+            echo ""
+            echo "opciones:"
+            echo "  -ip <direccion>       asigna directamente la ip objetivo del cliente."
+            echo "  --purge               elimina bind9, sus configuraciones y sale."
+            echo "  -h, --help            muestra este mensaje de ayuda."
+            exit 0
+            ;;
+        --purge)
+            log_warn "iniciando purga total de bind9..."
+            systemctl stop bind9 2>/dev/null || true
+            apt-get purge -y bind9 bind9utils bind9-doc dnsutils >/dev/null 2>&1
+            rm -rf /etc/bind /var/cache/bind
+            log_ok "bind9 desinstalado y carpetas eliminadas."
+            exit 0
+            ;;
+        -ip) 
+            IP_CLIENTE="$2"
+            shift 
+            ;;
+        *) 
+            log_warn "parametro desconocido: $1. use -h para ayuda." 
+            exit 1
+            ;;
     esac
     shift
 done
