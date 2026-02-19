@@ -235,6 +235,23 @@ validate_and_restart() {
     systemctl restart bind9 || log_error "Fallo al iniciar Demonio bind9."
     systemctl enable bind9 2>/dev/null || true
     log_ok "Daemon BIND9 reiniciado y activo."
+
+    log_info "Forzando a la máquina local a usar BIND9 como su DNS principal..."
+    # Si systemd-resolved existe, le indicamos que use el servidor DNS local (127.0.0.1)
+    if command -v resolvectl &>/dev/null; then
+        mkdir -p /etc/systemd/resolved.conf.d
+        cat <<EOF > /etc/systemd/resolved.conf.d/dns_servers.conf
+[Resolve]
+DNS=127.0.0.1
+Domains=~.
+EOF
+        systemctl restart systemd-resolved
+        log_ok "systemd-resolved reconfigurado para usar 127.0.0.1."
+    elif [ -f "/etc/resolv.conf" ]; then
+        # Backwards compatibility
+        sed -i '1i nameserver 127.0.0.1' /etc/resolv.conf
+        log_ok "/etc/resolv.conf modificado para priorizar 127.0.0.1."
+    fi
 }
 
 self_diagnostic() {
