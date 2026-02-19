@@ -189,17 +189,18 @@ function Test-Check {
     else       { Write-Host "$($name): fail" }
 }
 
-$serviceOk = (Get-Service DNS).Status -eq 'Running'
+$serviceOk = [bool]((Get-Service DNS).Status -eq 'Running')
 Test-Check "servicio dns" $serviceOk
 
-$portOk = (Get-NetTCPConnection -LocalPort 53 -ErrorAction SilentlyContinue) -ne $null
+$portConns = Get-NetTCPConnection -LocalPort 53 -ErrorAction SilentlyContinue
+$portOk = [bool]($null -ne $portConns)
 Test-Check "puerto 53" $portOk
 
 $aResolve = Resolve-DnsName -Name $Domain -Server 127.0.0.1 -ErrorAction SilentlyContinue
-Test-Check "nslookup $Domain" ($aResolve -ne $null)
+Test-Check "nslookup $Domain" [bool]($null -ne $aResolve)
 
 $cResolve = Resolve-DnsName -Name "www.$Domain" -Server 127.0.0.1 -ErrorAction SilentlyContinue
-Test-Check "nslookup www.$Domain" ($cResolve -ne $null)
+Test-Check "nslookup www.$Domain" [bool]($null -ne $cResolve)
 
 Write-Log "listo" "info"
 Exit 0
