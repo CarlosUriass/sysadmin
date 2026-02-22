@@ -105,9 +105,23 @@ try {
         Write-Log "interfaz interna detectada: $($ActiveIface.Name)" "info"
         $NetConf = Get-NetIPInterface -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4
         if ($NetConf.Dhcp -eq "Enabled") {
-            Write-Log "dhcp detectado. podria fallar" "alerta"
+            Write-Log "dhcp detectado. se cambiará a estática pura" "alerta"
+        } 
+
+        $currentIpObj = Get-NetIPAddress -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        $currentIpStr = if ($currentIpObj) { $currentIpObj.IPAddress } else { "" }
+
+        if ($currentIpStr -ne $TargetClientIP) {
+            Write-Log "cambiando IP de la interfaz $($ActiveIface.Name) a $TargetClientIP..." "info"
+            
+            # Limpiar IPs viejas
+            Get-NetIPAddress -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4 | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+            
+            # Asignar la nueva
+            New-NetIPAddress -InterfaceAlias $ActiveIface.Name -IPAddress $TargetClientIP -PrefixLength 24 -ErrorAction Stop | Out-Null
+            Write-Log "IP de interfaz cambiada a $TargetClientIP" "ok"
         } else {
-            Write-Log "ip estatica detectada" "ok"
+            Write-Log "IP de interfaz ya era $TargetClientIP" "ok"
         }
     }
 } catch {

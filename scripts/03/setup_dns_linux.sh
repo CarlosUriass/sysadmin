@@ -96,17 +96,44 @@ setup_static_ip() {
     local current_ip=$(ip -4 addr show dev "$internal_iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
     log_info "Interfaz de red interna detectada: $internal_iface (IP: ${current_ip:-Ninguna})"
     
-    # Si detectamos DHCP simple sin netplan complejo, validaremos
-    if ip route | grep -q "dhcp"; then
-        log_warn "Se detectó configuración IP gestionada por DHCP. Un servidor DNS exige IP estática."
-        read -p "[Interact] Desea que el script fije la IP actual ($current_ip) estáticamente vía Netplan? (s/n): " fix_ip
-        if [[ "${fix_ip,,}" == "s" ]]; then
-            echo "" # Setup manual omitido por robustez en entornos diversos, 
-            # delegamos responsabilidad alertando al admin.
-            log_warn "Se recomienda configurar manual en /etc/netplan. Continuaremos asumiendo persistencia."
+    if [[ "$current_ip" != "$IP_CLIENTE" ]]; then
+        log_info "La IP configurada ($current_ip) es distinta a la solicitada ($IP_CLIENTE). Aplicando cambio..."
+        
+        # Cambio temporal rapido
+        ip addr flush dev "$internal_iface" 2>/dev/null || true
+        ip addr add "${IP_CLIENTE}/24" dev "$internal_iface" 2>/dev/null
+        ip link set "$internal_iface" up
+        
+        # Persistencia en Netplan (Ubuntu)
+        if command -v netplan &>/dev/null; then
+            local netplan_file=$(find /etc/netplan/ -name "*.yaml" | head -n 1)
+            if [[ -z "$netplan_file" ]]; then
+                netplan_file="/etc/netplan/01-netcfg.yaml"
+            fi
+            
+            log_info "Sobreescribiendo configuración en $netplan_file para persistencia..."
+            cp "$netplan_file" "${netplan_file}.bak.$(date +%F)" 2>/dev/null || true
+            
+            # Identificar de nuevo la interfaz por defecto para no romper el internet de la VM
+            cat > "$netplan_file" <<EOF
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    $default_iface:
+      dhcp4: true
+    $internal_iface:
+      addresses:
+        - ${IP_CLIENTE}/24
+      dhcp4: false
+      nameservers:
+        addresses: [127.0.0.1, 8.8.8.8]
+EOF
+            netplan apply 2>/dev/null || log_warn "Fallo aplicando Netplan, verifique sintaxis en yaml."
+            log_ok "IP $IP_CLIENTE configurada permanentemente en $internal_iface mediante Netplan."
         fi
     else
-        log_ok "Red opera aparentemente fuera de pool DHCP dinámico."
+        log_ok "La interfaz interna ya posee la IP solicitada ($current_ip)."
     fi
 }
 
