@@ -94,10 +94,10 @@ $Domain = $DomainName
 
 try {
     # Buscar interfaz interna (la que NO tiene salida a internet por defecto)
-    $defaultRoutes = Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue
+    $defaultRoutes = @(Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue)
     $defaultIfaceIndices = @()
     if ($defaultRoutes) {
-        $defaultIfaceIndices = $defaultRoutes | Select-Object -ExpandProperty InterfaceIndex
+        $defaultIfaceIndices = @($defaultRoutes | Select-Object -ExpandProperty InterfaceIndex)
     }
 
     $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false -and $_.Name -notmatch "vEthernet|Default Switch|Loopback" }
