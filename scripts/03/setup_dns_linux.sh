@@ -279,6 +279,50 @@ self_diagnostic() {
 }
 
 # ------------------------------------------------------------------------------
+# 8. Integración dinámica con DHCP
+# ------------------------------------------------------------------------------
+integrate_dhcp() {
+    log_info "Verificando integración con DHCP..."
+    local dhcp_conf="/etc/dhcp/dhcpd.conf"
+    
+    # Obtener IP activa (omitir loopback)
+    local ACTIVE_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
+    
+    if systemctl is-active --quiet isc-dhcp-server; then
+        log_info "El servicio DHCP está activo."
+        if [[ -f "$dhcp_conf" && -n "$ACTIVE_IP" ]]; then
+            log_info "Actualizando DNS ($ACTIVE_IP) dinámicamente en DHCP..."
+            sed -i -E "s/option domain-name-servers .*/option domain-name-servers $ACTIVE_IP;/g" "$dhcp_conf"
+            systemctl restart isc-dhcp-server
+            log_ok "Servidor DNS ($ACTIVE_IP) inyectado en la configuración de DHCP."
+        fi
+    else
+        log_warn "El servicio DHCP no está activo."
+        local DIR_CURRENT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+        local DHCP_SCRIPT="$DIR_CURRENT/../02/dhcp.sh"
+        
+        if [[ -f "$DHCP_SCRIPT" ]]; then
+            read -p "[Interact] ¿Desea ejecutar el script DHCP (02) para configurarlo ahora? (s/n): " act_dhcp
+            if [[ "${act_dhcp,,}" == "s" ]]; then
+                log_info "Interactuando con script DHCP..."
+                bash "$DHCP_SCRIPT"
+                
+                # Inyectar después de la configuración manual, forzando nuestro DNS 
+                if [[ -f "$dhcp_conf" && -n "$ACTIVE_IP" ]]; then
+                    sed -i -E "s/option domain-name-servers .*/option domain-name-servers $ACTIVE_IP;/g" "$dhcp_conf"
+                    systemctl restart isc-dhcp-server
+                    log_ok "Servidor DNS ($ACTIVE_IP) inyectado de forma dinámica en el nuevo entorno DHCP."
+                fi
+            else
+                log_info "Se omitió la configuración de DHCP."
+            fi
+        else
+            log_warn "El script DHCP ($DHCP_SCRIPT) no se encontró, omitiendo integración."
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # M A I N  E X E C U T I O N 
 # ------------------------------------------------------------------------------
 echo "Iniciando Setup BIND9 Enterprise..."
@@ -341,6 +385,7 @@ configure_hardening
 inject_named_local
 generate_zone_file
 validate_and_restart
+integrate_dhcp
 
 # Purge cache
 rndc flush 2>/dev/null || true
