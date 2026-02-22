@@ -93,13 +93,26 @@ If ([string]::IsNullOrWhiteSpace($DomainName)) {
 $Domain = $DomainName
 
 try {
-    # Buscar Ethernet 2 o la que no sea la primera para asegurar red interna 
-    $ActiveIface = Get-NetAdapter -Name "Ethernet 2" -ErrorAction SilentlyContinue 
-    if (-not $ActiveIface) {
-        $ActiveIface = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false -and $_.Name -notmatch "Default Switch" } | Select-Object -Skip 1 -First 1
+    # Buscar interfaz interna (la que NO tiene salida a internet por defecto)
+    $defaultRoutes = Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue
+    $defaultIfaceIndices = @()
+    if ($defaultRoutes) {
+        $defaultIfaceIndices = $defaultRoutes | Select-Object -ExpandProperty InterfaceIndex
     }
-    # Fallback si solo hay 1
-    if (-not $ActiveIface) { $ActiveIface = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false } | Select-Object -First 1 }
+
+    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false -and $_.Name -notmatch "vEthernet|Default Switch|Loopback" }
+    
+    # Filtrar adaptadores que no tengan ruta default
+    if ($defaultIfaceIndices.Count -gt 0) {
+        $ActiveIface = $adapters | Where-Object { $defaultIfaceIndices -notcontains $_.InterfaceIndex } | Select-Object -First 1
+    }
+
+    # Fallback temporal si todos tienen internet o ninguno (en caso de error premio anterior)
+    if (-not $ActiveIface) { 
+        Write-Log "no se pudo deducir adaptador interno sin internet. usando primero disponible distinto al principal." "alerta"
+        $ActiveIface = $adapters | Select-Object -Skip 1 -First 1
+        if (-not $ActiveIface) { $ActiveIface = $adapters | Select-Object -First 1 }
+    }
     
     if ($ActiveIface) {
         Write-Log "interfaz interna detectada: $($ActiveIface.Name)" "info"
