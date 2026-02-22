@@ -12,10 +12,6 @@ param (
     [string]$TargetClientIP,
 
     [Parameter(Mandatory=$false, ParameterSetName='CLI')]
-    [ValidatePattern('^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')]
-    [string]$ServerInternalIP,
-
-    [Parameter(Mandatory=$false, ParameterSetName='CLI')]
     [string]$DomainName,
 
     [Parameter(Mandatory=$false)]
@@ -30,8 +26,7 @@ if ($Help) {
     Write-Host "  .\setup_dns_windows.ps1 [opciones]"
     Write-Host ""
     Write-Host "opciones:"
-    Write-Host "  -TargetClientIP <ip>   asigna la ip a donde resolverá el dominio (Web server)."
-    Write-Host "  -ServerInternalIP <ip> asigna la ip física de ESTE servidor DNS para la red interna."
+    Write-Host "  -TargetClientIP <ip>   asigna la ip a donde resolverá el dominio. El script auto-calculará su red."
     Write-Host "  -DomainName <dominio>  asigna el nombre de dominio a configurar."
     Write-Host "  -Purge                 elimina el rol de servidor dns, la zona y configuraciones."
     Write-Host "  -Help                  muestra este mensaje de ayuda."
@@ -115,9 +110,16 @@ try {
 
         $currentIpObj = Get-NetIPAddress -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
         $currentIpStr = if ($currentIpObj) { $currentIpObj.IPAddress } else { "" }
-        if ([string]::IsNullOrEmpty($ServerInternalIP)) {
-            $ServerInternalIP = if ([string]::IsNullOrEmpty($currentIpStr)) { "192.168.100.20" } else { $currentIpStr }
+
+        $octets = $TargetClientIP.Split('.')
+        $prefix = "$($octets[0]).$($octets[1]).$($octets[2])"
+        $ServerInternalIP = "$prefix.10"
+        
+        if ($ServerInternalIP -eq $TargetClientIP) {
+            $ServerInternalIP = "$prefix.11"
         }
+
+        Write-Log "IP de Dominio: $TargetClientIP. Auto-deduciendo IP Server: $ServerInternalIP" "info"
 
         if ($currentIpStr -ne $ServerInternalIP) {
             Write-Log "cambiando IP de la interfaz $($ActiveIface.Name) a $ServerInternalIP..." "info"

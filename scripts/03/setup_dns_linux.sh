@@ -96,13 +96,17 @@ setup_static_ip() {
 
     local current_ip=$(ip -4 addr show dev "$internal_iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
     
-    # Si no nos dieron IP para el servidor, asumimos la actual
-    if [[ -z "$IP_SERVIDOR" ]]; then
-        IP_SERVIDOR="${current_ip:-192.168.100.20}"
-        log_info "No se especificó -server_ip. Operando sobre $IP_SERVIDOR."
+    # Calcular automáticamente la IP del Servidor en base a la IP que el usuario pasó para el dominio
+    local prefix=$(echo "$IP_CLIENTE" | cut -d. -f1-3)
+    IP_SERVIDOR="${prefix}.10"
+    
+    # Evitar colisión si casualmente el usuario pidió que el dominio apunte a la .10
+    if [[ "$IP_CLIENTE" == "$IP_SERVIDOR" ]]; then
+        IP_SERVIDOR="${prefix}.11"
     fi
-
-    log_info "Interfaz de red interna detectada: $internal_iface (IP: ${current_ip:-Ninguna})"
+    
+    log_info "IP de Dominio Objetivo: $IP_CLIENTE. Asignando IP de Servidor DNS automáticamente a: $IP_SERVIDOR"
+    log_info "Interfaz de red interna detectada: $internal_iface (IP Local Actual: ${current_ip:-Ninguna})"
     
     if [[ "$current_ip" != "$IP_SERVIDOR" ]]; then
         log_info "La IP configurada ($current_ip) es distinta a la de servidor deseada ($IP_SERVIDOR). Aplicando cambio..."
@@ -395,8 +399,7 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "opciones:"
             echo "  -d, --domain <dominio> asigna el nombre de dominio a configurar."
-            echo "  -ip <direccion>       asigna la ip a donde resolverá el dominio (Ej: web server)."
-            echo "  --server_ip <dir>     asigna la ip física de ESTE servidor DNS para la red interna."
+            echo "  -ip <direccion>       asigna la ip a donde resolverá el dominio (Web Server). El script automatizará su propia red en base a esto."
             echo "  --purge               elimina bind9, sus configuraciones y sale."
             echo "  -h, --help            muestra este mensaje de ayuda."
             exit 0
@@ -411,10 +414,6 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         -d|--domain)
             DOMAIN="$2"
-            shift
-            ;;
-        --server_ip)
-            IP_SERVIDOR="$2"
             shift
             ;;
         -ip) 
