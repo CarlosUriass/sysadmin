@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Variables Globales
-DOMAIN="reprobados.com"
+DOMAIN=""
 IP_CLIENTE=""
 IFACE=""
 GATEWAY=""
@@ -297,6 +297,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  sudo ./setup_dns_linux.sh [opciones]"
             echo ""
             echo "opciones:"
+            echo "  -d, --domain <dominio> asigna el nombre de dominio a configurar."
             echo "  -ip <direccion>       asigna directamente la ip objetivo del cliente."
             echo "  --purge               elimina bind9, sus configuraciones y sale."
             echo "  -h, --help            muestra este mensaje de ayuda."
@@ -310,6 +311,10 @@ while [[ "$#" -gt 0 ]]; do
             log_ok "bind9 desinstalado y carpetas eliminadas."
             exit 0
             ;;
+        -d|--domain)
+            DOMAIN="$2"
+            shift
+            ;;
         -ip) 
             IP_CLIENTE="$2"
             shift 
@@ -320,6 +325,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
     esac
     shift
+done
+
+while [[ -z "$DOMAIN" ]]; do
+    read -p "Ingrese el nombre de Dominio (ej. local.test): " DOMAIN
 done
 
 while ! validate_ipv4 "$IP_CLIENTE"; do
