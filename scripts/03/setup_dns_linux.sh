@@ -84,10 +84,17 @@ setup_firewall() {
 }
 
 setup_static_ip() {
-    local active_iface=$(ip route get 8.8.8.8 2>/dev/null | grep dev | awk '{print $5}' || echo "")
-    if [[ -z "$active_iface" ]]; then active_iface="eth0"; fi
+    # Detectar la interfaz de red interna (la que NO tiene la ruta a internet default)
+    local default_iface=$(ip route | awk '/default/ {print $5}' | head -1)
+    # Listar interfaces, quitar loopback y la default, tomar la primera disponible (típicamente enp0s8)
+    local internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | grep -vE "^lo$|^$default_iface$" | head -1)
     
-    local current_ip=$(ip -4 addr show "$active_iface" 2>/dev/null | grep -oP 'inet \K[\d.]+')
+    if [[ -z "$internal_iface" ]]; then 
+        internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | sed -n '3p') # Fallback estricto a la 3ra
+    fi
+
+    local current_ip=$(ip -4 addr show dev "$internal_iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+    log_info "Interfaz de red interna detectada: $internal_iface (IP: ${current_ip:-Ninguna})"
     
     # Si detectamos DHCP simple sin netplan complejo, validaremos
     if ip route | grep -q "dhcp"; then
@@ -282,11 +289,20 @@ self_diagnostic() {
 # 8. Integración dinámica con DHCP
 # ------------------------------------------------------------------------------
 integrate_dhcp() {
-    log_info "Verificando integración con DHCP..."
+    log_info "Verificando integración con DHCP en la red interna..."
     local dhcp_conf="/etc/dhcp/dhcpd.conf"
     
-    # Obtener IP activa (omitir loopback)
-    local ACTIVE_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
+    # Obtener IP de la red interna (misma lógica que arriba)
+    local default_iface=$(ip route | awk '/default/ {print $5}' | head -1)
+    local internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | grep -vE "^lo$|^$default_iface$" | head -1)
+    if [[ -z "$internal_iface" ]]; then internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | sed -n '3p'); fi
+
+    local ACTIVE_IP=$(ip -4 addr show dev "$internal_iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+    
+    if [[ -z "$ACTIVE_IP" ]]; then
+        log_warn "No se detectó IP en la interfaz interna ($internal_iface). Omitiendo integración DHCP."
+        return
+    fi
     
     if systemctl is-active --quiet isc-dhcp-server; then
         log_info "El servicio DHCP está activo."
@@ -298,27 +314,39 @@ integrate_dhcp() {
         fi
     else
         log_warn "El servicio DHCP no está activo."
-        local DIR_CURRENT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-        local DHCP_SCRIPT="$DIR_CURRENT/../02/dhcp.sh"
+        # Configurar DHCP desde cero silenciosamente si el script existe o al menos está instalado
+        log_info "Instalando y configurando DHCP silenciosamente para la subred del DNS..."
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -qq isc-dhcp-server >/dev/null 2>&1 || true
+
+        local prefix=$(echo "$ACTIVE_IP" | cut -d. -f1-3)
+        local subnet="${prefix}.0"
+        local gw="${prefix}.1"
+        local start_ip="${prefix}.50"
+        local end_ip="${prefix}.150"
         
-        if [[ -f "$DHCP_SCRIPT" ]]; then
-            read -p "[Interact] ¿Desea ejecutar el script DHCP (02) para configurarlo ahora? (s/n): " act_dhcp
-            if [[ "${act_dhcp,,}" == "s" ]]; then
-                log_info "Interactuando con script DHCP..."
-                bash "$DHCP_SCRIPT"
-                
-                # Inyectar después de la configuración manual, forzando nuestro DNS 
-                if [[ -f "$dhcp_conf" && -n "$ACTIVE_IP" ]]; then
-                    sed -i -E "s/option domain-name-servers .*/option domain-name-servers $ACTIVE_IP;/g" "$dhcp_conf"
-                    systemctl restart isc-dhcp-server
-                    log_ok "Servidor DNS ($ACTIVE_IP) inyectado de forma dinámica en el nuevo entorno DHCP."
-                fi
-            else
-                log_info "Se omitió la configuración de DHCP."
-            fi
-        else
-            log_warn "El script DHCP ($DHCP_SCRIPT) no se encontró, omitiendo integración."
+        cat > "$dhcp_conf" <<EOF
+# Generado dinamicamente por DNS Script
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+
+subnet $subnet netmask 255.255.255.0 {
+    range $start_ip $end_ip;
+    option routers $gw;
+    option domain-name-servers $ACTIVE_IP;
+}
+EOF
+        
+        # Configurar interfaz por defecto si aplica
+        local DEFAULT_CONF="/etc/default/isc-dhcp-server"
+        if [[ -n "$internal_iface" && -f "$DEFAULT_CONF" ]]; then
+            sed -i "s/^INTERFACESv4=.*/INTERFACESv4=\"$internal_iface\"/" "$DEFAULT_CONF"
         fi
+
+        systemctl restart isc-dhcp-server || log_warn "No se pudo iniciar DHCP. Verifique logs del servicio."
+        systemctl enable isc-dhcp-server 2>/dev/null || true
+        log_ok "Servicio DHCP configurado dinámicamente: Subred $subnet/24, DNS $ACTIVE_IP."
     fi
 }
 

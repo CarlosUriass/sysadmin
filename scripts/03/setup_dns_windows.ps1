@@ -93,8 +93,16 @@ If ([string]::IsNullOrWhiteSpace($DomainName)) {
 $Domain = $DomainName
 
 try {
-    $ActiveIface = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false } | Select-Object -First 1
+    # Buscar Ethernet 2 o la que no sea la primera para asegurar red interna 
+    $ActiveIface = Get-NetAdapter -Name "Ethernet 2" -ErrorAction SilentlyContinue 
+    if (-not $ActiveIface) {
+        $ActiveIface = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false -and $_.Name -notmatch "Default Switch" } | Select-Object -Skip 1 -First 1
+    }
+    # Fallback si solo hay 1
+    if (-not $ActiveIface) { $ActiveIface = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false } | Select-Object -First 1 }
+    
     if ($ActiveIface) {
+        Write-Log "interfaz interna detectada: $($ActiveIface.Name)" "info"
         $NetConf = Get-NetIPInterface -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4
         if ($NetConf.Dhcp -eq "Enabled") {
             Write-Log "dhcp detectado. podria fallar" "alerta"
@@ -185,6 +193,49 @@ try {
     Write-Log "red modificada a 127.0.0.1" "ok"
 } catch {
     Write-Log "fallo el loopback dns" "alerta"
+}
+
+# ------------------------------------------------------------------------------
+# 6.5. Integración silenciosa con DHCP
+# ------------------------------------------------------------------------------
+try {
+    Write-Log "verificando si dhcp debe ser parametrizado dinámicamente..." "info"
+    $activeIpAddr = $null
+    if ($ActiveIface) {
+        $ipObj = Get-NetIPAddress -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($ipObj) { $activeIpAddr = $ipObj.IPAddress }
+    }
+
+    if (-not [string]::IsNullOrEmpty($activeIpAddr)) {
+        $dhcpSvc = Get-Service -Name "DHCPServer" -ErrorAction SilentlyContinue
+        
+        $octets = $activeIpAddr.Split('.')
+        $prefix = "$($octets[0]).$($octets[1]).$($octets[2])"
+        $subnet = "$prefix.0"
+        $startIp = "$prefix.50"
+        $endIp = "$prefix.150"
+        $gw = "$prefix.1"
+
+        if ($dhcpSvc -and $dhcpSvc.Status -eq 'Running') {
+            Write-Log "dhcp local activo. inyectando dns dinámicamente en scope $subnet..." "info"
+            Set-DhcpServerv4OptionValue -ScopeId $subnet -DnsServer $activeIpAddr -ErrorAction SilentlyContinue
+            Write-Log "dns actualizado en dhcp existente" "ok"
+        } else {
+            Write-Log "dhcp no activo. configurando rol silenciosamente..." "info"
+            Install-WindowsFeature -Name DHCP -IncludeManagementTools | Out-Null
+            Set-Service -Name DHCPServer -StartupType Automatic
+            Start-Service -Name DHCPServer
+
+            $existing = Get-DhcpServerv4Scope -ScopeId $subnet -ErrorAction SilentlyContinue
+            if (-not $existing) {
+                Add-DhcpServerv4Scope -Name "Dinámico DNS" -StartRange $startIp -EndRange $endIp -SubnetMask "255.255.255.0" -State Active -ErrorAction SilentlyContinue
+                Set-DhcpServerv4OptionValue -ScopeId $subnet -Router $gw -DnsServer $activeIpAddr -ErrorAction SilentlyContinue
+                Write-Log "scope $subnet-$startIp-$endIp creado con gw $gw y dns $activeIpAddr" "ok"
+            }
+        }
+    }
+} catch {
+    Write-Log "falló la integración dhcp (puede no estar instalado)" "alerta"
 }
 
 Write-Log "limpiando cache de dns y netbios para que el ping sirva..." "info"
