@@ -230,22 +230,28 @@ try {
         $endIp = "$prefix.150"
         $gw = "$prefix.1"
 
-        if ($dhcpSvc -and $dhcpSvc.Status -eq 'Running') {
-            Write-Log "dhcp local activo. inyectando dns dinámicamente en scope $subnet..." "info"
-            Set-DhcpServerv4OptionValue -ScopeId $subnet -DnsServer $activeIpAddr -ErrorAction SilentlyContinue
-            Write-Log "dns actualizado en dhcp existente" "ok"
-        } else {
-            Write-Log "dhcp no activo. configurando rol silenciosamente..." "info"
+        $dhcpFeature = Get-WindowsFeature -Name DHCP -ErrorAction SilentlyContinue
+        if (-not $dhcpFeature.Installed) {
+            Write-Log "dhcp no instalado. instalando rol silenciosamente..." "info"
             Install-WindowsFeature -Name DHCP -IncludeManagementTools | Out-Null
+        }
+        
+        $dhcpSvc = Get-Service -Name "DHCPServer" -ErrorAction SilentlyContinue
+        if ($dhcpSvc.Status -ne 'Running') {
             Set-Service -Name DHCPServer -StartupType Automatic
             Start-Service -Name DHCPServer
+        }
 
-            $existing = Get-DhcpServerv4Scope -ScopeId $subnet -ErrorAction SilentlyContinue
-            if (-not $existing) {
-                Add-DhcpServerv4Scope -Name "Dinámico DNS" -StartRange $startIp -EndRange $endIp -SubnetMask "255.255.255.0" -State Active -ErrorAction SilentlyContinue
-                Set-DhcpServerv4OptionValue -ScopeId $subnet -Router $gw -DnsServer $activeIpAddr -ErrorAction SilentlyContinue
-                Write-Log "scope $subnet-$startIp-$endIp creado con gw $gw y dns $activeIpAddr" "ok"
-            }
+        $existing = Get-DhcpServerv4Scope -ScopeId $subnet -ErrorAction SilentlyContinue
+        if (-not $existing) {
+            Write-Log "creando scope dinámico $subnet en dhcp..." "info"
+            Add-DhcpServerv4Scope -Name ("Scope " + $subnet) -StartRange $startIp -EndRange $endIp -SubnetMask "255.255.255.0" -State Active -ErrorAction SilentlyContinue
+            Set-DhcpServerv4OptionValue -ScopeId $subnet -Router $gw -DnsServer $activeIpAddr -ErrorAction SilentlyContinue
+            Write-Log "scope $subnet configurado con dns $activeIpAddr" "ok"
+        } else {
+            Write-Log "scope $subnet ya existe. actualizando opciones..." "info"
+            Set-DhcpServerv4OptionValue -ScopeId $subnet -Router $gw -DnsServer $activeIpAddr -ErrorAction SilentlyContinue
+            Write-Log "opciones actualizadas en scope dhcp" "ok"
         }
     }
 } catch {

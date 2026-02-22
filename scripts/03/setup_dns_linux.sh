@@ -319,7 +319,7 @@ integrate_dhcp() {
     log_info "Verificando integración con DHCP en la red interna..."
     local dhcp_conf="/etc/dhcp/dhcpd.conf"
     
-    # Obtener IP de la red interna (misma lógica que arriba)
+    # Obtener IP de la red interna
     local default_iface=$(ip route | awk '/default/ {print $5}' | head -1)
     local internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | grep -vE "^lo$|^$default_iface$" | head -1)
     if [[ -z "$internal_iface" ]]; then internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | sed -n '3p'); fi
@@ -330,29 +330,21 @@ integrate_dhcp() {
         log_warn "No se detectó IP en la interfaz interna ($internal_iface). Omitiendo integración DHCP."
         return
     fi
-    
-    if systemctl is-active --quiet isc-dhcp-server; then
-        log_info "El servicio DHCP está activo."
-        if [[ -f "$dhcp_conf" && -n "$ACTIVE_IP" ]]; then
-            log_info "Actualizando DNS ($ACTIVE_IP) dinámicamente en DHCP..."
-            sed -i -E "s/option domain-name-servers .*/option domain-name-servers $ACTIVE_IP;/g" "$dhcp_conf"
-            systemctl restart isc-dhcp-server
-            log_ok "Servidor DNS ($ACTIVE_IP) inyectado en la configuración de DHCP."
-        fi
-    else
-        log_warn "El servicio DHCP no está activo."
-        # Configurar DHCP desde cero silenciosamente si el script existe o al menos está instalado
-        log_info "Instalando y configurando DHCP silenciosamente para la subred del DNS..."
+
+    if ! dpkg -s isc-dhcp-server &>/dev/null; then
+        log_info "Servicio DHCP no encontrado. Instalando isc-dhcp-server..."
         export DEBIAN_FRONTEND=noninteractive
         apt-get install -y -qq isc-dhcp-server >/dev/null 2>&1 || true
+    fi
 
-        local prefix=$(echo "$ACTIVE_IP" | cut -d. -f1-3)
-        local subnet="${prefix}.0"
-        local gw="${prefix}.1"
-        local start_ip="${prefix}.50"
-        local end_ip="${prefix}.150"
-        
-        cat > "$dhcp_conf" <<EOF
+    local prefix=$(echo "$ACTIVE_IP" | cut -d. -f1-3)
+    local subnet="${prefix}.0"
+    local gw="${prefix}.1"
+    local start_ip="${prefix}.50"
+    local end_ip="${prefix}.150"
+    
+    log_info "Generando configuración DHCP para la subred $subnet/24..."
+    cat > "$dhcp_conf" <<EOF
 # Generado dinamicamente por DNS Script
 default-lease-time 600;
 max-lease-time 7200;
@@ -364,17 +356,15 @@ subnet $subnet netmask 255.255.255.0 {
     option domain-name-servers $ACTIVE_IP;
 }
 EOF
-        
-        # Configurar interfaz por defecto si aplica
-        local DEFAULT_CONF="/etc/default/isc-dhcp-server"
-        if [[ -n "$internal_iface" && -f "$DEFAULT_CONF" ]]; then
-            sed -i "s/^INTERFACESv4=.*/INTERFACESv4=\"$internal_iface\"/" "$DEFAULT_CONF"
-        fi
-
-        systemctl restart isc-dhcp-server || log_warn "No se pudo iniciar DHCP. Verifique logs del servicio."
-        systemctl enable isc-dhcp-server 2>/dev/null || true
-        log_ok "Servicio DHCP configurado dinámicamente: Subred $subnet/24, DNS $ACTIVE_IP."
+    
+    local DEFAULT_CONF="/etc/default/isc-dhcp-server"
+    if [[ -n "$internal_iface" && -f "$DEFAULT_CONF" ]]; then
+        sed -i "s/^INTERFACESv4=.*/INTERFACESv4=\"$internal_iface\"/" "$DEFAULT_CONF"
     fi
+
+    systemctl restart isc-dhcp-server || log_warn "Problemas al iniciar DHCP. Revisa journalctl -u isc-dhcp-server."
+    systemctl enable isc-dhcp-server 2>/dev/null || true
+    log_ok "DHCP enrutando correctamente sobre la interfaz $internal_iface (Subred: $subnet)."
 }
 
 # ------------------------------------------------------------------------------
