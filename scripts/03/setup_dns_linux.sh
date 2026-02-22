@@ -12,6 +12,7 @@ set -euo pipefail
 # Variables Globales
 DOMAIN=""
 IP_CLIENTE=""
+IP_SERVIDOR=""
 IFACE=""
 GATEWAY=""
 MASK=""
@@ -94,14 +95,21 @@ setup_static_ip() {
     fi
 
     local current_ip=$(ip -4 addr show dev "$internal_iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+    
+    # Si no nos dieron IP para el servidor, asumimos la actual
+    if [[ -z "$IP_SERVIDOR" ]]; then
+        IP_SERVIDOR="${current_ip:-192.168.100.20}"
+        log_info "No se especificó -server_ip. Operando sobre $IP_SERVIDOR."
+    fi
+
     log_info "Interfaz de red interna detectada: $internal_iface (IP: ${current_ip:-Ninguna})"
     
-    if [[ "$current_ip" != "$IP_CLIENTE" ]]; then
-        log_info "La IP configurada ($current_ip) es distinta a la solicitada ($IP_CLIENTE). Aplicando cambio..."
+    if [[ "$current_ip" != "$IP_SERVIDOR" ]]; then
+        log_info "La IP configurada ($current_ip) es distinta a la de servidor deseada ($IP_SERVIDOR). Aplicando cambio..."
         
         # Cambio temporal rapido
         ip addr flush dev "$internal_iface" 2>/dev/null || true
-        ip addr add "${IP_CLIENTE}/24" dev "$internal_iface" 2>/dev/null
+        ip addr add "${IP_SERVIDOR}/24" dev "$internal_iface" 2>/dev/null
         ip link set "$internal_iface" up
         
         # Persistencia en Netplan (Ubuntu)
@@ -124,16 +132,16 @@ network:
       dhcp4: true
     $internal_iface:
       addresses:
-        - ${IP_CLIENTE}/24
+        - ${IP_SERVIDOR}/24
       dhcp4: false
       nameservers:
         addresses: [127.0.0.1, 8.8.8.8]
 EOF
             netplan apply 2>/dev/null || log_warn "Fallo aplicando Netplan, verifique sintaxis en yaml."
-            log_ok "IP $IP_CLIENTE configurada permanentemente en $internal_iface mediante Netplan."
+            log_ok "IP de Servidor $IP_SERVIDOR configurada permanentemente en $internal_iface mediante Netplan."
         fi
     else
-        log_ok "La interfaz interna ya posee la IP solicitada ($current_ip)."
+        log_ok "La interfaz interna ya posee la IP de servidor solicitada ($current_ip)."
     fi
 }
 
@@ -387,7 +395,8 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "opciones:"
             echo "  -d, --domain <dominio> asigna el nombre de dominio a configurar."
-            echo "  -ip <direccion>       asigna directamente la ip objetivo del cliente."
+            echo "  -ip <direccion>       asigna la ip a donde resolverá el dominio (Ej: web server)."
+            echo "  --server_ip <dir>     asigna la ip física de ESTE servidor DNS para la red interna."
             echo "  --purge               elimina bind9, sus configuraciones y sale."
             echo "  -h, --help            muestra este mensaje de ayuda."
             exit 0
@@ -402,6 +411,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         -d|--domain)
             DOMAIN="$2"
+            shift
+            ;;
+        --server_ip)
+            IP_SERVIDOR="$2"
             shift
             ;;
         -ip) 
