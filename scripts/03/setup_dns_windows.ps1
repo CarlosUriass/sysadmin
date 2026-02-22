@@ -93,25 +93,36 @@ If ([string]::IsNullOrWhiteSpace($DomainName)) {
 $Domain = $DomainName
 
 try {
-    # Buscar interfaz interna (la que NO tiene salida a internet por defecto)
+    # 1. Obtener todas las rutas por defecto (Internet)
     $defaultRoutes = @(Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue)
-    $defaultIfaceIndices = @()
+    $internetIfaceIndices = @()
     if ($defaultRoutes) {
-        $defaultIfaceIndices = @($defaultRoutes | Select-Object -ExpandProperty InterfaceIndex)
+        $internetIfaceIndices = @($defaultRoutes | Select-Object -ExpandProperty InterfaceIndex)
     }
 
-    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false -and $_.Name -notmatch "vEthernet|Default Switch|Loopback" }
+    # 2. Obtener todos los adaptadores físicos activos
+    $adapters = @(Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false -and $_.Name -notmatch "vEthernet|Default Switch|Loopback" })
     
-    # Filtrar adaptadores que no tengan ruta default
-    if ($defaultIfaceIndices.Count -gt 0) {
-        $ActiveIface = $adapters | Where-Object { $defaultIfaceIndices -notcontains $_.InterfaceIndex } | Select-Object -First 1
+    # 3. Filtrar estrictamente los que NO tienen internet
+    $internalAdapters = @()
+    if ($internetIfaceIndices.Count -gt 0) {
+        $internalAdapters = @($adapters | Where-Object { $internetIfaceIndices -notcontains $_.InterfaceIndex })
     }
 
-    # Fallback temporal si todos tienen internet o ninguno (en caso de error premio anterior)
-    if (-not $ActiveIface) { 
-        Write-Log "no se pudo deducir adaptador interno sin internet. usando primero disponible distinto al principal." "alerta"
-        $ActiveIface = $adapters | Select-Object -Skip 1 -First 1
-        if (-not $ActiveIface) { $ActiveIface = $adapters | Select-Object -First 1 }
+    # 4. Asignación de Prioridad Estratégica
+    if ($internalAdapters.Count -gt 0) {
+        # Si encontró uno claro sin internet, lo usamos.
+        $ActiveIface = $internalAdapters[0]
+    } else {
+        # Fallback de emergencia extrema (El enrutamiento no funcionó).
+        # En el entorno del usuario: "Ethernet" (índice 0) es local y "Ethernet 2" (índice 1) es Internet.
+        Write-Log "No se discernió red aislada por enrutamiento. Aplicando fallback de exclusión..." "alerta"
+        if ($adapters.Count -gt 1) {
+            $ActiveIface = $adapters[0]
+        } elseif ($adapters.Count -eq 1) {
+            $ActiveIface = $adapters[0]
+            Write-Log "CUIDADO: Solo existe un adaptador activo ($($ActiveIface.Name)). Se usará este." "alerta"
+        }
     }
     
     if ($ActiveIface) {
