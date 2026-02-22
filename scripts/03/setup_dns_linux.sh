@@ -247,17 +247,17 @@ generate_zone_file() {
     cat <<EOF > "$ZONE_FILE"
 \$TTL    86400
 @       IN      SOA     ns1.$DOMAIN. admin.$DOMAIN. (
-                     $NEW_SERIAL   ; Serial
-                         604800         ; Refresh
-                          86400         ; Retry
-                        2419200         ; Expire
-                          86400 )       ; Negative Cache TTL
+                     $NEW_SERIAL    ; Serial
+                         604800     ; Refresh
+                          86400     ; Retry
+                        2419200     ; Expire
+                          86400 )   ; Negative Cache TTL
 
 ; --- Name Servers ---
 @       IN      NS      ns1.$DOMAIN.
-ns1     IN      A       127.0.0.1
+ns1     IN      A       $IP_SERVIDOR
 
-; --- Registros Petición ---
+; --- Registros Peticion ---
 @       IN      A       $IP_CLIENTE
 www     IN      CNAME   $DOMAIN.
 EOF
@@ -282,9 +282,13 @@ validate_and_restart() {
     fi
     log_ok "Sintaxis binaria aprobada."
     
-    systemctl restart bind9 || log_error "Fallo al iniciar Demonio bind9."
+    systemctl stop bind9 2>/dev/null || true
+    # Forzar la limpieza de cache y temporales jnl si los hubiera
+    rm -f ${ZONE_FILE}.jnl
+    
+    systemctl start bind9 || log_error "Fallo al iniciar Demonio bind9."
     systemctl enable bind9 2>/dev/null || true
-    log_ok "Daemon BIND9 reiniciado y activo."
+    log_ok "Daemon BIND9 reiniciado y activo sin cache."
 
     log_info "Forzando a la máquina local a usar BIND9 como su DNS principal..."
     # Si systemd-resolved existe, le indicamos que use el servidor DNS local (127.0.0.1)
