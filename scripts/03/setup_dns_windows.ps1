@@ -103,46 +103,16 @@ If ([string]::IsNullOrWhiteSpace($DomainName)) {
 $Domain = $DomainName
 
 try {
-    # 1. Obtener todas las rutas por defecto (Internet)
-    $defaultRoutes = @(Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue)
-    $internetIfaceIndices = @()
-    if ($defaultRoutes) {
-        $internetIfaceIndices = @($defaultRoutes | Select-Object -ExpandProperty InterfaceIndex)
-    }
-
-    # 2. Obtener todos los adaptadores físicos activos
-    $adapters = @(Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Virtual -eq $false -and $_.Name -notmatch "vEthernet|Default Switch|Loopback" })
+    $IfaceName = & "$PSScriptRoot\..\..\utils\ps1\get_internal_iface.ps1"
     
-    # 3. Filtrar estrictamente los que NO tienen internet
-    $internalAdapters = @()
-    if ($internetIfaceIndices.Count -gt 0) {
-        $internalAdapters = @($adapters | Where-Object { $internetIfaceIndices -notcontains $_.InterfaceIndex })
-    }
-
-    # 4. Asignación de Prioridad Estratégica
-    if ($internalAdapters.Count -gt 0) {
-        # Si encontró uno claro sin internet, lo usamos.
-        $ActiveIface = $internalAdapters[0]
-    } else {
-        # Fallback de emergencia extrema (El enrutamiento no funcionó).
-        # En el entorno del usuario: "Ethernet" (índice 0) es local y "Ethernet 2" (índice 1) es Internet.
-        Write-Log "No se discernió red aislada por enrutamiento. Aplicando fallback de exclusión..." "alerta"
-        if ($adapters.Count -gt 1) {
-            $ActiveIface = $adapters[0]
-        } elseif ($adapters.Count -eq 1) {
-            $ActiveIface = $adapters[0]
-            Write-Log "CUIDADO: Solo existe un adaptador activo ($($ActiveIface.Name)). Se usará este." "alerta"
-        }
-    }
-    
-    if ($ActiveIface) {
-        Write-Log "interfaz interna detectada: $($ActiveIface.Name)" "info"
-        $NetConf = Get-NetIPInterface -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4
+    if ($IfaceName) {
+        Write-Log "interfaz interna detectada: $IfaceName" "info"
+        $NetConf = Get-NetIPInterface -InterfaceAlias $IfaceName -AddressFamily IPv4
         if ($NetConf.Dhcp -eq "Enabled") {
             Write-Log "dhcp detectado. se cambiará a estática pura" "alerta"
         } 
 
-        $currentIpObj = Get-NetIPAddress -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        $currentIpObj = Get-NetIPAddress -InterfaceAlias $IfaceName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
         $currentIpStr = if ($currentIpObj) { $currentIpObj.IPAddress } else { "" }
 
         $octets = $TargetClientIP.Split('.')
@@ -156,13 +126,13 @@ try {
         Write-Log "IP de Dominio: $TargetClientIP. Auto-deduciendo IP Server: $ServerInternalIP" "info"
 
         if ($currentIpStr -ne $ServerInternalIP) {
-            Write-Log "cambiando IP de la interfaz $($ActiveIface.Name) a $ServerInternalIP..." "info"
+            Write-Log "cambiando IP de la interfaz $IfaceName a $ServerInternalIP..." "info"
             
             # Limpiar IPs viejas
-            Get-NetIPAddress -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4 | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+            Get-NetIPAddress -InterfaceAlias $IfaceName -AddressFamily IPv4 | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
             
             # Asignar la nueva
-            New-NetIPAddress -InterfaceAlias $ActiveIface.Name -IPAddress $ServerInternalIP -PrefixLength 24 -ErrorAction Stop | Out-Null
+            New-NetIPAddress -InterfaceAlias $IfaceName -IPAddress $ServerInternalIP -PrefixLength 24 -ErrorAction Stop | Out-Null
             Write-Log "IP de interfaz del servidor cambiada a $ServerInternalIP" "ok"
         } else {
             Write-Log "IP de interfaz ya era $ServerInternalIP" "ok"
@@ -259,8 +229,8 @@ try {
 try {
     Write-Log "verificando si dhcp debe ser parametrizado dinámicamente..." "info"
     $activeIpAddr = $null
-    if ($ActiveIface) {
-        $ipObj = Get-NetIPAddress -InterfaceAlias $ActiveIface.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($IfaceName) {
+        $ipObj = Get-NetIPAddress -InterfaceAlias $IfaceName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($ipObj) { $activeIpAddr = $ipObj.IPAddress }
     }
 

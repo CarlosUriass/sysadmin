@@ -81,14 +81,11 @@ setup_firewall() {
 }
 
 setup_static_ip() {
-    # Detectar la interfaz de red interna (la que NO tiene la ruta a internet default)
+    # Detectar local default_iface para configuracion netplan posterior
     local default_iface=$(ip route | awk '/default/ {print $5}' | head -1)
-    # Listar interfaces, quitar loopback y la default, tomar la primera disponible (típicamente enp0s8)
-    local internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | grep -vE "^lo$|^$default_iface$" | head -1)
-    
-    if [[ -z "$internal_iface" ]]; then 
-        internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | sed -n '3p') # Fallback estricto a la 3ra
-    fi
+
+    # Detectar la interfaz de red interna (la que NO tiene la ruta a internet default)
+    local internal_iface=$(bash "$(dirname "$0")/../../utils/sh/get_internal_iface.sh")
 
     local current_ip=$(ip -4 addr show dev "$internal_iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
     
@@ -332,9 +329,7 @@ integrate_dhcp() {
     local dhcp_conf="/etc/dhcp/dhcpd.conf"
     
     # Obtener IP de la red interna
-    local default_iface=$(ip route | awk '/default/ {print $5}' | head -1)
-    local internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | grep -vE "^lo$|^$default_iface$" | head -1)
-    if [[ -z "$internal_iface" ]]; then internal_iface=$(ip -o link show | awk -F': ' '{print $2}' | sed -n '3p'); fi
+    local internal_iface=$(bash "$(dirname "$0")/../../utils/sh/get_internal_iface.sh")
 
     local ACTIVE_IP=$(ip -4 addr show dev "$internal_iface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
     

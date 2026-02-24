@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-IFACE="enp0s8"
+IFACE=$(bash "$(dirname "$0")/../../utils/sh/get_internal_iface.sh")
 CONF="/etc/dhcp/dhcpd.conf"
 LEASES_FILE="/var/lib/dhcp/dhcpd.leases"
 DEFAULT_CONF="/etc/default/isc-dhcp-server"
