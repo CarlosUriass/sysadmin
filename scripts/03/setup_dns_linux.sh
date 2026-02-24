@@ -116,8 +116,7 @@ install_bind9() {
     if dpkg -s bind9 &>/dev/null; then
         log_ok "BIND9 ya está instalado. Omitiendo apt-get."
     else
-        apt-get update -qq
-        apt-get install -y -qq bind9 bind9utils bind9-doc dnsutils
+        bash "$(dirname "$0")/../../utils/sh/install_package.sh" -p bind9 bind9utils bind9-doc dnsutils
         log_ok "Paquetes instalados."
     fi
 }
@@ -305,8 +304,7 @@ integrate_dhcp() {
 
     if ! dpkg -s isc-dhcp-server &>/dev/null; then
         log_info "Servicio DHCP no encontrado. Instalando isc-dhcp-server..."
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y -qq isc-dhcp-server >/dev/null 2>&1 || true
+        bash "$(dirname "$0")/../../utils/sh/install_package.sh" -p isc-dhcp-server >/dev/null 2>&1 || true
     fi
 
     local prefix=$(echo "$ACTIVE_IP" | cut -d. -f1-3)

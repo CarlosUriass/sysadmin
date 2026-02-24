@@ -99,10 +99,7 @@ instalar_dhcp() {
     if dpkg -s isc-dhcp-server &>/dev/null; then
         echo "isc-dhcp-server ya esta instalado"
     else
-        echo "Instalando isc-dhcp-server..."
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y -qq isc-dhcp-server
+        bash "$(dirname "$0")/../../utils/sh/install_package.sh" -p isc-dhcp-server
         echo "Instalacion completada"
     fi
 

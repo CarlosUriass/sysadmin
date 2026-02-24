@@ -146,7 +146,7 @@ try {
         Write-Log "rol dns ya instalado" "ok"
     } else {
         Write-Log "instalando rol dns..." "info"
-        Install-WindowsFeature -Name DNS -IncludeManagementTools | Out-Null
+        & "$PSScriptRoot\..\..\utils\ps1\install_feature.ps1" -FeatureName DNS
         Write-Log "instalado" "ok"
     }
 
@@ -242,12 +242,7 @@ try {
         $dhcpFeature = Get-WindowsFeature -Name DHCP -ErrorAction SilentlyContinue
         if (-not $dhcpFeature.Installed) {
             Write-Log "dhcp no instalado. instalando rol..." "info"
-            try {
-                Install-WindowsFeature -Name DHCP -IncludeManagementTools -ErrorAction Stop | Out-Null
-            } catch {
-                Write-Log "Forzando descarga de DHCP a través de Windows Update..." "alerta"
-                Install-WindowsFeature -Name DHCP -IncludeManagementTools -IncludeAllSubFeature -ErrorAction SilentlyContinue | Out-Null
-            }
+            & "$PSScriptRoot\..\..\utils\ps1\install_feature.ps1" -FeatureName DHCP -IncludeAllSubFeature
         }
         
         $dhcpSvc = Get-Service -Name "DHCPServer" -ErrorAction SilentlyContinue

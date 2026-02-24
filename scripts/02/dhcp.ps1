@@ -121,7 +121,7 @@ function Instalar-DHCP {
         Write-Host "dhcp server ya instalado"
     } else {
         Write-Host "instalando dhcp server..."
-        Install-WindowsFeature -Name DHCP -IncludeManagementTools -ErrorAction Stop | Out-Null
+        & "$PSScriptRoot\..\..\utils\ps1\install_feature.ps1" -FeatureName DHCP -IncludeAllSubFeature
         Write-Host "instalacion completada"
     }
 
