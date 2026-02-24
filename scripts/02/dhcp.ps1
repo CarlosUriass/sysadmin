@@ -37,25 +37,18 @@ $BLACKLIST = @(
 # --- funciones auxiliares ---
 
 function Verificar-Administrador {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $pr = New-Object Security.Principal.WindowsPrincipal($id)
-    if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Host "error: ejecutar como administrador"
+    & "$PSScriptRoot\..\..\utils\ps1\permissions.ps1" -CheckAdmin
+    if ($LASTEXITCODE -ne 0) {
         exit 1
     }
 }
 
 function Validar-IP {
     param([string]$IP)
-    if ($IP -notmatch '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$') {
-        Write-Host "error: formato invalido '$IP'"
+    & "$PSScriptRoot\..\..\utils\ps1\validate_ip.ps1" -IP $IP
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "error: formato invalido o fuera de rango en '$IP'"
         return $false
-    }
-    foreach ($o in $Matches[1..4]) {
-        if ([int]$o -gt 255) {
-            Write-Host "error: octeto fuera de rango en '$IP'"
-            return $false
-        }
     }
     return $true
 }

@@ -44,19 +44,15 @@ log_error() { echo "error: $1" >&2; echo "$(date) - error: $1" >> "$LOG_FILE"; e
 trap 'log_error "fallo en linea $LINENO. abortando."' ERR
 
 check_root() {
-    if [[ "$EUID" -ne 0 ]]; then
+    bash "$(dirname "$0")/../../utils/sh/permissions.sh" --check-root >/dev/null 2>&1
+    if [[ $? -ne 0 ]]; then
         log_error "Privilegios insuficientes. Ejecute como root (sudo)."
     fi
 }
 
 validate_ipv4() {
-    local ip="$1"
-    if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then return 1; fi
-    IFS='.' read -r -a octet <<< "$ip"
-    for i in "${octet[@]}"; do
-        if (( i > 255 )); then return 1; fi
-    done
-    return 0
+    bash "$(dirname "$0")/../../utils/sh/validate_ip.sh" --ip "$1" >/dev/null 2>&1
+    return $?
 }
 
 check_port_53() {

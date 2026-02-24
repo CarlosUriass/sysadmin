@@ -19,23 +19,15 @@ BLACKLIST=(
     "230." "231." "232." "233." "234." "235." "236." "237." "238." "239."
 )
 
-# Validar formato IPv4 con regex + rango de octetos
+# Validar formato IPv4 con helper script
 validar_ip() {
     local ip="$1"
-    local regex='^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$'
-
-    if [[ ! "$ip" =~ $regex ]]; then
-        echo "Error: formato invalido '$ip'"
+    bash "$(dirname "$0")/../../utils/sh/validate_ip.sh" --ip "$ip" >/dev/null 2>&1
+    local status=$?
+    if [[ $status -ne 0 ]]; then
+        echo "Error: formato invalido o fuera de rango en '$ip'"
         return 1
     fi
-
-    local o1="${BASH_REMATCH[1]}" o2="${BASH_REMATCH[2]}" o3="${BASH_REMATCH[3]}" o4="${BASH_REMATCH[4]}"
-    for octeto in "$o1" "$o2" "$o3" "$o4"; do
-        if (( octeto > 255 )); then
-            echo "Error: octeto fuera de rango en '$ip'"
-            return 1
-        fi
-    done
     return 0
 }
 
@@ -298,8 +290,8 @@ mostrar_ayuda() {
 
 # Verificar root
 verificar_root() {
-    if [[ $EUID -ne 0 ]]; then
-        echo "Error: ejecutar como root (sudo)"
+    bash "$(dirname "$0")/../../utils/sh/permissions.sh" --check-root
+    if [[ $? -ne 0 ]]; then
         exit 1
     fi
 }

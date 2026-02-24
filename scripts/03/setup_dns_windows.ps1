@@ -8,7 +8,6 @@ Implementa infraestructura crítica as-code. Totalmente idempotente, genera logs
 [CmdletBinding(DefaultParameterSetName='Interactive')]
 param (
     [Parameter(Mandatory=$false, ParameterSetName='CLI')]
-    [ValidatePattern('^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')]
     [string]$TargetClientIP,
 
     [Parameter(Mandatory=$false, ParameterSetName='CLI')]
@@ -67,8 +66,8 @@ Write-Log "iniciando dns server" "info"
 # 2. Assertions y Seguridad Previa
 # ------------------------------------------------------------------------------
 try {
-    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    & "$PSScriptRoot\..\..\utils\ps1\permissions.ps1" -CheckAdmin *>$null
+    if ($LASTEXITCODE -ne 0) {
         throw "abre esto como administrador"
     }
 } catch {
@@ -80,9 +79,20 @@ try {
 # 3. Interfaz y Red
 # ------------------------------------------------------------------------------
 If ([string]::IsNullOrEmpty($TargetClientIP)) {
+    $validIP = $false
     do {
         $TargetClientIP = Read-Host "ip del cliente objetivo"
-    } until ($TargetClientIP -match "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$")
+        if (-not [string]::IsNullOrEmpty($TargetClientIP)) {
+            & "$PSScriptRoot\..\..\utils\ps1\validate_ip.ps1" -IP $TargetClientIP *>$null
+            if ($LASTEXITCODE -eq 0) { $validIP = $true }
+        }
+    } until ($validIP)
+} else {
+    & "$PSScriptRoot\..\..\utils\ps1\validate_ip.ps1" -IP $TargetClientIP *>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error: ip provista '$TargetClientIP' es invalida."
+        exit 1
+    }
 }
 
 If ([string]::IsNullOrWhiteSpace($DomainName)) {
