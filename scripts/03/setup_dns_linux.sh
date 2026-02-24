@@ -81,9 +81,6 @@ setup_firewall() {
 }
 
 setup_static_ip() {
-    # Detectar local default_iface para configuracion netplan posterior
-    local default_iface=$(ip route | awk '/default/ {print $5}' | head -1)
-
     # Detectar la interfaz de red interna (la que NO tiene la ruta a internet default)
     local internal_iface=$(bash "$(dirname "$0")/../../utils/sh/get_internal_iface.sh")
 
@@ -103,40 +100,8 @@ setup_static_ip() {
     
     if [[ "$current_ip" != "$IP_SERVIDOR" ]]; then
         log_info "La IP configurada ($current_ip) es distinta a la de servidor deseada ($IP_SERVIDOR). Aplicando cambio..."
-        
-        # Cambio temporal rapido
-        ip addr flush dev "$internal_iface" 2>/dev/null || true
-        ip addr add "${IP_SERVIDOR}/24" dev "$internal_iface" 2>/dev/null
-        ip link set "$internal_iface" up
-        
-        # Persistencia en Netplan (Ubuntu)
-        if command -v netplan &>/dev/null; then
-            local netplan_file=$(find /etc/netplan/ -name "*.yaml" | head -n 1)
-            if [[ -z "$netplan_file" ]]; then
-                netplan_file="/etc/netplan/01-netcfg.yaml"
-            fi
-            
-            log_info "Sobreescribiendo configuración en $netplan_file para persistencia..."
-            cp "$netplan_file" "${netplan_file}.bak.$(date +%F)" 2>/dev/null || true
-            
-            # Identificar de nuevo la interfaz por defecto para no romper el internet de la VM
-            cat > "$netplan_file" <<EOF
-network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    $default_iface:
-      dhcp4: true
-    $internal_iface:
-      addresses:
-        - ${IP_SERVIDOR}/24
-      dhcp4: false
-      nameservers:
-        addresses: [127.0.0.1, 8.8.8.8]
-EOF
-            netplan apply 2>/dev/null || log_warn "Fallo aplicando Netplan, verifique sintaxis en yaml."
-            log_ok "IP de Servidor $IP_SERVIDOR configurada permanentemente en $internal_iface mediante Netplan."
-        fi
+        bash "$(dirname "$0")/../../utils/sh/set_static_ip.sh" --iface "$internal_iface" --ip "${IP_SERVIDOR}/24"
+        log_ok "IP de Servidor $IP_SERVIDOR configurada en $internal_iface."
     else
         log_ok "La interfaz interna ya posee la IP de servidor solicitada ($current_ip)."
     fi

@@ -108,17 +108,7 @@ function Adaptar-IPEstatica {
 
     $nuevaIP = "$nuevaSub.10"
     Write-Host "subred diferente: actual=$ipAct nueva=$nuevaSub.0/$PREFIX_LEN"
-    Write-Host "cambiando ip de $IFACE a $nuevaIP/$PREFIX_LEN..."
-
-    Get-NetIPAddress -InterfaceAlias $IFACE -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-
-    Get-NetRoute -InterfaceAlias $IFACE -ErrorAction SilentlyContinue |
-        Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0' } |
-        Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
-
-    New-NetIPAddress -InterfaceAlias $IFACE -IPAddress $nuevaIP -PrefixLength $PREFIX_LEN -ErrorAction Stop | Out-Null
-    Write-Host "ip cambiada a $nuevaIP"
+    & "$PSScriptRoot\..\..\utils\ps1\set_static_ip.ps1" -InterfaceName $IFACE -IP $nuevaIP -PrefixLength $PREFIX_LEN
 }
 
 # --- instalacion idempotente ---

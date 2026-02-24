@@ -90,31 +90,7 @@ adaptar_ip_estatica() {
 
     local nueva_ip="${nueva_subred}.10"
     echo "La subred del rango ($nueva_subred.0/24) es diferente a la IP actual ($ip_actual)"
-    echo "Cambiando IP de $IFACE a $nueva_ip/24 ..."
-
-    ip addr flush dev "$IFACE" 2>/dev/null || true
-    ip addr add "${nueva_ip}/24" dev "$IFACE" 2>/dev/null
-    ip link set "$IFACE" up
-
-    # Persistir en netplan si existe
-    if [[ -d "$NETPLAN_DIR" ]]; then
-        local netplan_file=$(find "$NETPLAN_DIR" -name "*.yaml" -type f | head -1)
-        if [[ -n "$netplan_file" ]]; then
-            cp "$netplan_file" "${netplan_file}.bak.$(date +%s)"
-            cat > "$netplan_file" <<NETEOF
-network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    $IFACE:
-      addresses:
-        - ${nueva_ip}/24
-      dhcp4: false
-NETEOF
-            netplan apply 2>/dev/null || echo "Aviso: netplan apply fallo, IP asignada manualmente"
-        fi
-    fi
-    echo "IP cambiada a $nueva_ip"
+    bash "$(dirname "$0")/../../utils/sh/set_static_ip.sh" --iface "$IFACE" --ip "${nueva_ip}/24"
 }
 
 # Instalacion idempotente

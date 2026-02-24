@@ -127,12 +127,7 @@ try {
 
         if ($currentIpStr -ne $ServerInternalIP) {
             Write-Log "cambiando IP de la interfaz $IfaceName a $ServerInternalIP..." "info"
-            
-            # Limpiar IPs viejas
-            Get-NetIPAddress -InterfaceAlias $IfaceName -AddressFamily IPv4 | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-            
-            # Asignar la nueva
-            New-NetIPAddress -InterfaceAlias $IfaceName -IPAddress $ServerInternalIP -PrefixLength 24 -ErrorAction Stop | Out-Null
+            & "$PSScriptRoot\..\..\utils\ps1\set_static_ip.ps1" -InterfaceName $IfaceName -IP $ServerInternalIP -PrefixLength 24
             Write-Log "IP de interfaz del servidor cambiada a $ServerInternalIP" "ok"
         } else {
             Write-Log "IP de interfaz ya era $ServerInternalIP" "ok"
