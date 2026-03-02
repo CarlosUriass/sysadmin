@@ -218,9 +218,9 @@ function Configure-IISFtp {
     if ($LASTEXITCODE -eq 0) {
         Write-LogSuccess "Sitio $SiteName iniciado correctamente via appcmd."
     } else {
-        Write-LogWarn "appcmd start site: $StartResult — intentando fallback Start-WebSite..."
+        Write-LogWarn "appcmd start site: $StartResult - intentando fallback Start-WebSite..."
         try { Start-WebSite -Name $SiteName -ErrorAction Stop }
-        catch { Write-LogWarn "Start-WebSite también reportó: $_. Continuando de todas formas..." }
+        catch { Write-LogWarn "Start-WebSite tambien reporto fallo: $_. Continuando..." }
     }
 
     # Reiniciar servicio FTP
