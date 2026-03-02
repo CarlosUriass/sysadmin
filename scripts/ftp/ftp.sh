@@ -396,8 +396,35 @@ mostrar_ayuda() {
     echo "Opciones:"
     echo "  -h, --help                          Mostrar esta ayuda"
     echo "  -p, --purge                         Purgar vsftpd, borrar usuarios, configuraciones y directorios"
+    echo "  -l, --list                          Listar los usuarios FTP creados y su grupo actual"
     echo "  -c, --change-group <user> <group>   Cambiar el grupo de un usuario (reprobados/recursadores)"
     echo "  Sin opciones                        Inicia el flujo de instalación y el menú interactivo"
+}
+
+listar_usuarios() {
+    echo "=== USUARIOS FTP REGISTRADOS ==="
+    printf "%-20s | %-15s\n" "USUARIO" "GRUPO"
+    echo "----------------------------------------"
+    
+    local hay_usuarios=0
+    # Buscar usuarios del sistema y comprobar a que grupo FTP pertenecen
+    for user in $(awk -F: '$4 >= 1000 {print $1}' /etc/passwd); do
+        local user_groups
+        user_groups=$(id -Gn "$user" 2>/dev/null || true)
+        
+        # Solo mostrar si pertenecen a los grupos que gestiona nuestro FTP
+        if [[ " $user_groups " =~ " ftpusers " ]]; then
+            local grupo_primario
+            grupo_primario=$(id -gn "$user" 2>/dev/null || echo "Desconocido")
+            printf "%-20s | %-15s\n" "$user" "$grupo_primario"
+            hay_usuarios=1
+        fi
+    done
+    
+    if [[ $hay_usuarios -eq 0 ]]; then
+        echo "No hay usuarios FTP creados por este script."
+    fi
+    echo "----------------------------------------"
 }
 
 purgar_ftp() {
@@ -465,6 +492,9 @@ main() {
     case "$1" in
         -h|--help)
             mostrar_ayuda
+            ;;
+        -l|--list)
+            listar_usuarios
             ;;
         -p|--purge)
             purgar_ftp
