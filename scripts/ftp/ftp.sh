@@ -140,8 +140,8 @@ pasv_max_port=40100
 # FTPS (Seguridad Opcional)
 ssl_enable=YES
 allow_anon_ssl=NO
-force_local_data_ssl=YES
-force_local_logins_ssl=YES
+force_local_data_ssl=NO
+force_local_logins_ssl=NO
 ssl_tlsv1=YES
 ssl_sslv2=NO
 ssl_sslv3=NO
@@ -382,32 +382,101 @@ menu_interactivo() {
 }
 
 # ==============================================================================
+# 6. MANTENIMIENTO Y AYUDA
+# ==============================================================================
+mostrar_ayuda() {
+    echo "Uso: sudo bash $0 [OPCION]"
+    echo ""
+    echo "Opciones:"
+    echo "  -h, --help                          Mostrar esta ayuda"
+    echo "  -p, --purge                         Purgar vsftpd, borrar usuarios, configuraciones y directorios"
+    echo "  -c, --change-group <user> <group>   Cambiar el grupo de un usuario (reprobados/recursadores)"
+    echo "  Sin opciones                        Inicia el flujo de instalación y el menú interactivo"
+}
+
+purgar_ftp() {
+    log_warn "Iniciando purgado completo de FTP. Esto borrará datos y configuraciones..."
+    
+    # 1. Detener servicio
+    systemctl stop vsftpd 2>/dev/null || true
+    systemctl disable vsftpd 2>/dev/null || true
+
+    # 2. Desinstalar paquete
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get purge -y -qq vsftpd >/dev/null 2>&1 || true
+    apt-get autoremove -y -qq >/dev/null 2>&1 || true
+
+    # 3. Desmontar directorios en fstab
+    log_info "Desmontando directorios chroot enlazados..."
+    while read -r line; do
+        if [[ "$line" == *"/srv/ftp/"* ]]; then
+            dest=$(echo "$line" | awk '{print $2}')
+            if mountpoint -q "$dest"; then
+                umount "$dest" 2>/dev/null || true
+            fi
+        fi
+    done < /etc/fstab
+    # Borrar lineas de fstab
+    sed -i '\@/srv/ftp/@d' /etc/fstab || true
+
+    # 4. Eliminar usuarios (Todos los que pertenezcan a los grupos)
+    log_info "Eliminando usuarios FTP y directorios..."
+    for user in $(awk -F: '$4 >= 1000 {print $1}' /etc/passwd); do
+        if id -nG "$user" 2>/dev/null | grep -qwE "reprobados|recursadores|ftpusers"; then
+            userdel -f "$user" 2>/dev/null || true
+        fi
+    done
+
+    # 5. Eliminar estructura
+    rm -rf /srv/ftp
+
+    # 6. Eliminar grupos
+    log_info "Eliminando grupos FTP..."
+    groupdel ftpusers 2>/dev/null || true
+    groupdel reprobados 2>/dev/null || true
+    groupdel recursadores 2>/dev/null || true
+
+    # 7. Eliminar configuraciones extra
+    rm -rf /etc/vsftpd.conf /etc/vsftpd.conf.bak /var/log/vsftpd.log /etc/ssl/private/vsftpd.pem 2>/dev/null || true
+
+    log_success "Purgado completado. Sistema FTP limpio."
+}
+
+# ==============================================================================
 # MAIN
 # ==============================================================================
 main() {
     check_root
     
-    if [[ $# -gt 0 ]]; then
-        case "$1" in
-            --change-group)
-                if [[ $# -ne 3 ]]; then
-                    echo "Uso: $0 --change-group <usuario> <nuevo_grupo(reprobados|recursadores)>"
-                    exit 1
-                fi
-                cambiar_grupo_usuario "$2" "$3"
-                ;;
-            *)
-                echo "Uso: $0 [--change-group <user> <group>]"
-                exit 1
-                ;;
-        esac
+    if [[ $# -eq 0 ]]; then
+        log_info "Iniciando instalación y configuración automatizada FTP."
+        instalar_paquetes
+        menu_interactivo
+        log_success "Proceso de automatización finalizado correctamente."
         exit 0
     fi
 
-    log_info "Iniciando instalación y configuración automatizada FTP."
-    instalar_paquetes
-    menu_interactivo
-    log_success "Proceso de automatización finalizado correctamente."
+    case "$1" in
+        -h|--help)
+            mostrar_ayuda
+            ;;
+        -p|--purge)
+            purgar_ftp
+            ;;
+        -c|--change-group)
+            if [[ $# -ne 3 ]]; then
+                echo "Error: Argumentos inválidos."
+                mostrar_ayuda
+                exit 1
+            fi
+            cambiar_grupo_usuario "$2" "$3"
+            ;;
+        *)
+            echo "Opción desconocida: $1"
+            mostrar_ayuda
+            exit 1
+            ;;
+    esac
 }
 
 # Evitar que el script se cierre en errores dentro de la ejecución si es interactivo, 
