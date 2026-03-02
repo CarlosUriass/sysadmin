@@ -202,9 +202,49 @@ function Configure-IISFtp {
     # Aislamiento de usuarios (modo 2 = IsolateRootDirectoryOnly, chroot a LocalUser/<username>)
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
 
-    # Autenticación: Basic habilitado, Anónimo deshabilitado
-    Set-WebConfigurationProperty -PSPath "IIS:\" -Location "$SiteName" -Filter "system.ftpServer/security/authentication/basicAuthentication" -Name "enabled" -Value $true
-    Set-WebConfigurationProperty -PSPath "IIS:\" -Location "$SiteName" -Filter "system.ftpServer/security/authentication/anonymousAuthentication" -Name "enabled" -Value $false
+    # Autenticación: editar applicationHost.config directamente (XML).
+    # Las secciones FTP auth no están registradas en el schema de este IIS,
+    # por lo que appcmd, Set-ItemProperty y Set-WebConfigurationProperty fallan.
+    $AppHostPath = "$env:windir\system32\inetsrv\config\applicationHost.config"
+    [xml]$AppHostXml = Get-Content $AppHostPath
+
+    # Buscar o crear <location path="AutomatedFTP">
+    $LocNode = $AppHostXml.configuration.SelectSingleNode("location[@path='$SiteName']")
+    if (-Not $LocNode) {
+        $LocNode = $AppHostXml.CreateElement("location")
+        $LocNode.SetAttribute("path", $SiteName)
+        $AppHostXml.configuration.AppendChild($LocNode) | Out-Null
+    }
+
+    # Construir la ruta: system.ftpServer > security > authentication
+    foreach ($Tag in @("system.ftpServer", "security", "authentication")) {
+        $Child = $LocNode.SelectSingleNode($Tag)
+        if (-Not $Child) {
+            $Child = $AppHostXml.CreateElement($Tag)
+            $LocNode.AppendChild($Child) | Out-Null
+        }
+        $LocNode = $Child
+    }
+    $AuthNode = $LocNode
+
+    # basicAuthentication enabled="true"
+    $BasicNode = $AuthNode.SelectSingleNode("basicAuthentication")
+    if (-Not $BasicNode) {
+        $BasicNode = $AppHostXml.CreateElement("basicAuthentication")
+        $AuthNode.AppendChild($BasicNode) | Out-Null
+    }
+    $BasicNode.SetAttribute("enabled", "true")
+
+    # anonymousAuthentication enabled="false"
+    $AnonNode = $AuthNode.SelectSingleNode("anonymousAuthentication")
+    if (-Not $AnonNode) {
+        $AnonNode = $AppHostXml.CreateElement("anonymousAuthentication")
+        $AuthNode.AppendChild($AnonNode) | Out-Null
+    }
+    $AnonNode.SetAttribute("enabled", "false")
+
+    $AppHostXml.Save($AppHostPath)
+    Write-LogSuccess "Autenticación FTP configurada (Basic=ON, Anonymous=OFF)."
 
     # Autorización: solo ftpusers con lectura y escritura
     & $AppCmd clear config "$SiteName" -section:system.ftpServer/security/authorization /commit:apphost | Out-Null
