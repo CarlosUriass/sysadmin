@@ -275,8 +275,12 @@ function Create-FtpUser {
     # Permite navegar a "/general" y "/reprobados" desde el chroot
 
     function Ensure-VirtualDirectory ($VirtualPath, $PhysicalPath) {
-        if (-Not (Test-Path "IIS:\Sites\AutomatedFTP$VirtualPath")) {
-            New-WebVirtualDirectory -Site "AutomatedFTP" -Name $VirtualPath.Split('/')[-1] -PhysicalPath $PhysicalPath -Application $VirtualPath.Substring(0, $VirtualPath.LastIndexOf('/')) -Force | Out-Null
+        $Name = $VirtualPath.Split('/')[-1]
+        $AppPath = $VirtualPath.Substring(0, $VirtualPath.LastIndexOf('/'))
+        
+        $Exists = Get-WebVirtualDirectory -Site "AutomatedFTP" -Application $AppPath -Name $Name -ErrorAction SilentlyContinue
+        if (-Not $Exists) {
+            New-WebVirtualDirectory -Site "AutomatedFTP" -Name $Name -PhysicalPath $PhysicalPath -Application $AppPath -Force | Out-Null
             Write-LogInfo "Directorio Virtual IIS mapeado: $VirtualPath"
         }
     }
@@ -322,16 +326,17 @@ function Change-FtpUserGroup {
     }
     Add-LocalGroupMember -Group $NewGroup -Member $Username
     
-    # 2. Desvincular Directorio Virtual del Directorio Válido del Viejo Grupo en IIS
-    if ($OldGroup -and (Test-Path "IIS:\Sites\AutomatedFTP\LocalUser\$Username\$OldGroup")) {
+    # 2. Desvincular Directorio Virtual del Directorio Valido del Viejo Grupo en IIS
+    $OldVDirPath = "/LocalUser/$Username/$OldGroup"
+    if ($OldGroup -and (Get-WebVirtualDirectory -Site "AutomatedFTP" -Application "/LocalUser/$Username" -Name $OldGroup -ErrorAction SilentlyContinue)) {
         Remove-WebVirtualDirectory -Site "AutomatedFTP" -Application "/LocalUser/$Username" -Name $OldGroup -Force | Out-Null
         Write-LogInfo "Enlace virtual de IIS para $OldGroup eliminado de /LocalUser/$Username."
     }
 
     # 3. Vincular Nuevo Directorio Virtual en IIS
-    if (-Not (Test-Path "IIS:\Sites\AutomatedFTP\LocalUser\$Username\$NewGroup")) {
+    if (-Not (Get-WebVirtualDirectory -Site "AutomatedFTP" -Application "/LocalUser/$Username" -Name $NewGroup -ErrorAction SilentlyContinue)) {
         New-WebVirtualDirectory -Site "AutomatedFTP" -Name $NewGroup -PhysicalPath "$FtpRoot\$NewGroup" -Application "/LocalUser/$Username" -Force | Out-Null
-        Write-LogInfo "Enlace virtual nuevo mapeado: /LocalUser/$Username/$NewGroup apuntando a física de $NewGroup"
+        Write-LogInfo "Enlace virtual nuevo mapeado: /LocalUser/$Username/$NewGroup apuntando a fisica de $NewGroup"
     }
 
     Write-LogSuccess "Migración completada exitosamente. $Username ahora pertenece exclusivamente a $NewGroup."
@@ -353,10 +358,10 @@ function Interactive-Menu {
     Write-Host ""
     
     while ($true) {
-        $NumUsers = Read-Host "¿Cuántos usuarios desea crear? (0 para salir)"
+        $NumUsers = Read-Host "Cuantos usuarios desea crear? (0 para salir)"
         if ($NumUsers -match "^\d+$") {
             if ([int]$NumUsers -eq 0) {
-                Write-LogInfo "Saliendo del asistente automático."
+                Write-LogInfo "Saliendo del asistente automatico."
                 break
             }
 
@@ -367,16 +372,16 @@ function Interactive-Menu {
                 while ($true) {
                     $uName = Read-Host "Nombre de usuario (ej. juan_perez)"
                     if ($uName -match "^[a-z_][a-z0-9_-]{2,31}$") { break }
-                    Write-LogWarn "Nombre inválido."
+                    Write-LogWarn "Nombre invalido."
                 }
 
                 $uPass = ""
                 while ($true) {
-                    # Ocultar contraseña al escribir
-                    $sec = Read-Host "Contraseña" -AsSecureString
+                    # Ocultar contrasena al escribir
+                    $sec = Read-Host "Contrasena" -AsSecureString
                     $uPass = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
                     if (-not [string]::IsNullOrEmpty($uPass)) { break }
-                    Write-LogWarn "Contraseña no puede estar vacía."
+                    Write-LogWarn "La contrasena no puede estar vacia."
                 }
 
                 $uGrupo = ""
