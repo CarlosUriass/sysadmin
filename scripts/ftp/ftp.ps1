@@ -193,54 +193,28 @@ function Configure-IISFtp {
         Write-LogSuccess "El certificado SSL Autofirmado ya existe."
     }
 
-    # SSL Opcional (0 = permite texto plano y SSL, no fuerza cifrado)
+    # SSL Opcional (permite texto plano y SSL)
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.serverCertHash"       -Value $Cert.Thumbprint
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value 0
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.dataChannelPolicy"    -Value 0
     Write-LogSuccess "Control FTPS asociado al sitio $SiteName (SSL Totalmente Opcional/Texto Plano Permitido)."
 
-    # Aislamiento de usuarios (2 = IsolateAllDirectories / LocalUser chroot)
-    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
+    # Aislamiento de usuarios (chroot equivalente)
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 3
 
-    # Autenticacion
+    # Autenticación: Basic habilitado, Anónimo deshabilitado (interfiere con User Isolation)
     & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/basicAuthentication     /enabled:"True"  /commit:apphost | Out-Null
-    
-    # Habilitar Anónimo y mapearlo forzosamente a IUSR (requerido por IIS FTP para no dar 530)
-    & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/anonymousAuthentication /enabled:"True" /userName:"IUSR" /commit:apphost | Out-Null
+    & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/anonymousAuthentication /enabled:"False" /commit:apphost | Out-Null
 
-    # Autorización (limpiar y reconfigurar — idempotente)
+    # Autorización: solo ftpusers con lectura y escritura
     & $AppCmd clear config "$SiteName" -section:system.ftpServer/security/authorization /commit:apphost | Out-Null
-    & $AppCmd set config   "$SiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',users='Anonymous',permissions='Read']"       /commit:apphost | Out-Null
     & $AppCmd set config   "$SiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',roles='ftpusers',permissions='Read, Write']" /commit:apphost | Out-Null
 
     Write-LogSuccess "Seguridad, roles y aislamiento aplicados y verificados."
 
-    # Reiniciar ftpsvc para que IIS propague el nuevo sitio FTP en su metabase COM.
+    # Reiniciar ftpsvc (inicia todos los sitios FTP automáticamente)
     Restart-Service ftpsvc -Force
     Start-Sleep -Seconds 2
-
-    # Verificar si el sitio ya quedó iniciado tras el reinicio de ftpsvc.
-    # En la mayoría de entornos, Restart-Service inicia todos los sitios FTP
-    # automáticamente, por lo que appcmd start site lanza 0x800710D8 si se
-    # intenta iniciar un sitio que ya está corriendo.
-    $SiteState = & $AppCmd list site /name:"$SiteName" /text:state 2>&1
-    if ($SiteState -match "Started") {
-        Write-LogSuccess "Sitio $SiteName ya se encuentra iniciado (auto-start tras reinicio ftpsvc)."
-    } else {
-        Write-LogInfo "Estado del sitio: $SiteState. Intentando iniciar..."
-        $StartResult = & $AppCmd start site /site.name:"$SiteName" 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-LogSuccess "Sitio $SiteName iniciado correctamente via appcmd."
-        } else {
-            Write-LogWarn "appcmd start site: $StartResult. Intentando Start-WebSite..."
-            try {
-                Start-WebSite -Name $SiteName -ErrorAction Stop
-                Write-LogSuccess "Sitio $SiteName iniciado via Start-WebSite."
-            } catch {
-                Write-LogWarn "Start-WebSite fallo: $_. Verificando puerto 21..."
-            }
-        }
-    }
 
     # Validación final
     $Binding = Get-WebBinding -Name $SiteName -ErrorAction SilentlyContinue
