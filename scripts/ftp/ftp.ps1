@@ -182,30 +182,23 @@ function Configure-IISFtp {
 function Configure-Firewall {
     Write-LogInfo "Configurando reglas del Firewall de Windows (Modo Pasivo e Inicial)..."
 
-    $Rules = @(
-        @{ Name = "FTP-Server-Control"; Port = 21 },
-        @{ Name = "FTP-Server-Secure"; Port = 990 },
-        @{ Name = "FTP-Server-Passive"; Port = "40000-40100" }
-    )
-
-    foreach ($Rule in $Rules) {
-        $Exists = Get-NetFirewallRule -DisplayName $Rule.Name -ErrorAction SilentlyContinue
-        if (-Not $Exists) {
-            New-NetFirewallRule -DisplayName $Rule.Name -Direction Inbound -Protocol TCP -LocalPort $Rule.Port -Action Allow | Out-Null
-            Write-LogSuccess "Regla de Firewall agregada: $($Rule.Name) Puerto(s): $($Rule.Port)"
-        }
-    }
+    # Habilitar el Grupo Nativo predeterminado de IIS para FTP (Esto configura todo el motor ALG interno)
+    Enable-NetFirewallRule -DisplayGroup "FTP Server" -ErrorAction SilentlyContinue | Out-Null
     
-    # Habilitar inspeccion de estado FTP (Crucial para clientes externos pase Pasivo FTP libremente)
-    $StatefulFTP = Get-NetFirewallRule -DisplayName "FTP-Server-Stateful" -ErrorAction SilentlyContinue
-    if (-Not $StatefulFTP) {
-        New-NetFirewallRule -DisplayName "FTP-Server-Stateful" -Direction Inbound -Protocol TCP -LocalPort 21 -Action Allow -Service "ftpsvc" | Out-Null
-        # Forzar la carga del modulo ALG si el firewall lo droppea externamente
-        netsh advfirewall firewall add rule name="FTP-Internet" action=allow protocol=TCP dir=in localport=21 > $null
-        Write-LogSuccess "Inspeccion de estado y acceso desde Internet para FTP habilitado."
+    # Activar la inspeccion de estado globalmente para todo el trafico TCP FTP en el servidor
+    netsh advfirewall set global StatefulFtp enable > $null
+    
+    # Abrir expresamente el bloque para el Modo Pasivo
+    $ExistsPassive = Get-NetFirewallRule -DisplayName "FTP-Server-Passive" -ErrorAction SilentlyContinue
+    if (-Not $ExistsPassive) {
+        New-NetFirewallRule -DisplayName "FTP-Server-Passive" -Direction Inbound -Protocol TCP -LocalPort 40000-40100 -Action Allow | Out-Null
+        Write-LogSuccess "Regla de Firewall agregada: FTP-Server-Passive Puerto(s): 40000-40100"
     }
 
-    Write-LogSuccess "Firewall de Windows configurado."
+    # Forzar el reinicio final para mapear el servicio a los puertos
+    Restart-Service -Name "ftpsvc" -Force
+    
+    Write-LogSuccess "Firewall de Windows configurado (Stateful FTP Global activado)."
 }
 
 function Configure-LocalSecurityPolicy {
