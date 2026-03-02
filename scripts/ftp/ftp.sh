@@ -7,22 +7,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOG_FILE="/var/log/ftp-automation.log"
 
 # ==============================================================================
 # 0. FUNCIONES DE UTILIDAD Y LOGGING
 # ==============================================================================
-log_info() { echo -e "[\e[34mINFO\e[0m] $(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"; }
-log_success() { echo -e "[\e[32mOK\e[0m]   $(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"; }
-log_warn() { echo -e "[\e[33mWARN\e[0m] $(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"; }
-log_error() { echo -e "[\e[31mFAIL\e[0m] $(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"; exit 1; }
+# Cargar el logger centralizado
+if [[ -f "$SCRIPT_DIR/../../utils/logs/logger.sh" ]]; then
+    source "$SCRIPT_DIR/../../utils/logs/logger.sh"
+else
+    echo "ERROR: No se encuentra la utilidad logger.sh en utils/logs/"
+    exit 1
+fi
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        echo "Este script debe ejecutarse como root (con sudo)."
-        exit 1
+        log_error "Este script debe ejecutarse como root (con sudo)."
     fi
-    touch "$LOG_FILE" || { echo "No se pudo crear el archivo de log $LOG_FILE"; exit 1; }
 }
 
 instalar_paquetes() {
@@ -337,7 +337,7 @@ menu_interactivo() {
     while true; do
         read -p "¿Cuántos usuarios desea crear? (0 para salir): " num_users
         if ! [[ "$num_users" =~ ^[0-9]+$ ]]; then
-            echo "Por favor ingrese un número válido."
+            log_warn "Por favor ingrese un número válido."
             continue
         fi
 
@@ -356,7 +356,7 @@ menu_interactivo() {
                 if [[ "$u_name" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]]; then
                     break
                 else
-                    echo "Nombre inválido. Use minúsculas, números y guiones (ej. juan_perez)."
+                    log_warn "Nombre inválido. Use minúsculas, números y guiones (ej. juan_perez)."
                 fi
             done
 
@@ -365,7 +365,7 @@ menu_interactivo() {
                 read -s -p "Contraseña: " u_pass
                 echo ""
                 if [[ -z "$u_pass" ]]; then
-                    echo "La contraseña no puede estar vacía."
+                    log_warn "La contraseña no puede estar vacía."
                 else
                     break
                 fi
@@ -377,7 +377,7 @@ menu_interactivo() {
                 if [[ "$u_grupo" == "reprobados" || "$u_grupo" == "recursadores" ]]; then
                     break
                 else
-                    echo "Debe elegir 'reprobados' o 'recursadores'."
+                    log_warn "Debe elegir 'reprobados' o 'recursadores'."
                 fi
             done
 
@@ -422,7 +422,7 @@ listar_usuarios() {
     done
     
     if [[ $hay_usuarios -eq 0 ]]; then
-        echo "No hay usuarios FTP creados por este script."
+        log_info "No hay usuarios FTP creados por este script."
     fi
     echo "----------------------------------------"
 }
@@ -501,16 +501,14 @@ main() {
             ;;
         -c|--change-group)
             if [[ $# -ne 3 ]]; then
-                echo "Error: Argumentos inválidos."
                 mostrar_ayuda
-                exit 1
+                log_error "Argumentos inválidos para --change-group."
             fi
             cambiar_grupo_usuario "$2" "$3"
             ;;
         *)
-            echo "Opción desconocida: $1"
             mostrar_ayuda
-            exit 1
+            log_error "Opción desconocida: $1"
             ;;
     esac
 }
