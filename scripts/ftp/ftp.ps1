@@ -35,11 +35,10 @@ function Check-Root {
 }
 
 function Install-Packages {
-    Write-LogInfo "Iniciando instalación de características IIS para FTP..."
-    
     # Instalador robusto si existe la utilidad
     $InstallerScript = Join-Path $ScriptDir "..\..\utils\ps1\install_feature.ps1"
-    $Features = @("Web-Ftp-Server", "Web-Ftp-Service", "Web-Mgmt-Console")
+    # Web-Ftp-Ext es crítico para poder editar configuración interna del FTP via PowerShell (IIS Extensibility/WMI)
+    $Features = @("Web-Ftp-Server", "Web-Ftp-Service", "Web-Ftp-Ext", "Web-Mgmt-Console")
     
     if (Test-Path $InstallerScript) {
         foreach ($Feature in $Features) {
