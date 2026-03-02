@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
 Utilidad centralizada para imprimir logs en pantalla.
-Uso: . "ruta\a\logger.ps1"
 #>
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 function Write-LogInfo ([string]$Message) {
     $Stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"

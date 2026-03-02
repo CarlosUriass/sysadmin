@@ -39,10 +39,13 @@ function Install-Packages {
     
     # Instalador robusto si existe la utilidad
     $InstallerScript = Join-Path $ScriptDir "..\..\utils\ps1\install_feature.ps1"
+    $Features = @("Web-Ftp-Server", "Web-Ftp-Service", "Web-Mgmt-Console")
+    
     if (Test-Path $InstallerScript) {
-        & $InstallerScript -Features "Web-Ftp-Server", "Web-Ftp-Service", "Web-Mgmt-Console"
+        foreach ($Feature in $Features) {
+            & $InstallerScript -FeatureName $Feature
+        }
     } else {
-        $Features = @("Web-Ftp-Server", "Web-Ftp-Service", "Web-Mgmt-Console")
         foreach ($Feature in $Features) {
             $Check = Get-WindowsFeature $Feature -ErrorAction SilentlyContinue
             if ($Check.Installed) {
