@@ -195,7 +195,31 @@ function Configure-Firewall {
             Write-LogSuccess "Regla de Firewall agregada: $($Rule.Name) Puerto(s): $($Rule.Port)"
         }
     }
-    Write-LogSuccess "Firewall de Windows configurado para FTP."
+    Write-LogSuccess "Firewall de Windows configurado."
+}
+
+function Configure-LocalSecurityPolicy {
+    Write-LogWarn "Deshabilitando requisitos de complejidad y longitud de contraseñas locales (secedit)..."
+    
+    $CfgFile = "$env:TEMP\secpol.inf"
+    secedit /export /cfg $CfgFile /Quiet | Out-Null
+    
+    # Leer el archivo respetando el encoding Unicode de Microsoft
+    $Content = Get-Content $CfgFile -Encoding Unicode
+    
+    # Reemplazar la política sin importar espacios
+    $Content = $Content -replace "(?i)^PasswordComplexity\s*=\s*1", "PasswordComplexity = 0"
+    $Content = $Content -replace "(?i)^MinimumPasswordLength\s*=\s*\d+", "MinimumPasswordLength = 0"
+    
+    $Content | Set-Content $CfgFile -Encoding Unicode -Force
+    
+    # Re-importar y forzar
+    secedit /configure /db $env:windir\security\local.sdb /cfg $CfgFile /areas SECURITYPOLICY /Quiet | Out-Null
+    
+    # Adicional para que no espere días en caducar contraseñas
+    net accounts /maxpwage:unlimited /minpwlen:0 /minpwage:0 | Out-Null
+    
+    Write-LogSuccess "Restricciones de contraseña locales eliminadas."
 }
 
 # ==============================================================================
@@ -321,6 +345,7 @@ function Interactive-Menu {
     Configure-BaseAndGroups
     Configure-IISFtp
     Configure-Firewall
+    Configure-LocalSecurityPolicy
 
     Write-Host "======================================" -ForegroundColor Magenta
     Write-Host "  Configuración Base FTP completada.  " -ForegroundColor Magenta
