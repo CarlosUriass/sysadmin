@@ -193,11 +193,11 @@ function Configure-IISFtp {
         Write-LogSuccess "El certificado SSL Autofirmado ya existe."
     }
 
-    # Configurar SSL (Opcional — controlChannelPolicy=1 significa que SSL es aceptado pero no forzado)
-    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.serverCertHash"     -Value $Cert.Thumbprint
-    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value 1
-    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.dataChannelPolicy"    -Value 1
-    Write-LogSuccess "Control FTPS asociado al sitio $SiteName (SSL Opcional)."
+    # Configurar SSL (Opcional - controlChannelPolicy=0 significa que SSL es opcional, 1 es requerido)
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.serverCertHash"       -Value $Cert.Thumbprint
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value 0
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.dataChannelPolicy"    -Value 0
+    Write-LogSuccess "Control FTPS asociado al sitio $SiteName (SSL Totalmente Opcional/Texto Plano Permitido)."
 
     # Aislamiento de usuarios (2 = IsolateAllDirectories / LocalUser chroot)
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
