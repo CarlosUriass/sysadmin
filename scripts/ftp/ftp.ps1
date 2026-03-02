@@ -346,11 +346,7 @@ function Configure-LocalSecurityPolicy {
 # 5. GESTIÓN DE USUARIOS
 # ==============================================================================
 
-function Get-FtpUserVirtualDirectories ($Username) {
-    $Username = $Username.Trim()
-    $VDirs = Get-WebVirtualDirectory -Site "AutomatedFTP" -Application "/LocalUser/$Username" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path
-    return $VDirs
-}
+
 
 function Create-FtpUser {
     param([string]$Username, [string]$Group, [string]$Password)
@@ -398,23 +394,20 @@ function Create-FtpUser {
     $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("IUSR",          "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
     Set-Acl -Path $UserRootDir -AclObject $AclHome
 
-    # 4. Directorios Virtuales IIS (bind-mount de Windows)
-    function Ensure-VirtualDirectory ($VirtualPath, $PhysicalPath) {
-        $Name    = $VirtualPath.Split('/')[-1]
-        $AppPath = $VirtualPath.Substring(0, $VirtualPath.LastIndexOf('/'))
-
-        $Exists = Get-WebVirtualDirectory -Site "AutomatedFTP" -Application $AppPath -Name $Name -ErrorAction SilentlyContinue
-        if (-Not $Exists) {
-            New-WebVirtualDirectory -Site "AutomatedFTP" -Name $Name -PhysicalPath $PhysicalPath -Application $AppPath -Force | Out-Null
-            Write-LogInfo "Directorio Virtual IIS mapeado: $VirtualPath -> $PhysicalPath"
+    # 4. Junction Points (equivalente a mount --bind en Linux)
+    # Con User Isolation, IIS FTP solo muestra directorios físicos.
+    # Los NTFS Junctions enlazan carpetas compartidas dentro del chroot del usuario.
+    foreach ($JuncInfo in @(
+        @{ Path = "$UserRootDir\general"; Target = "$FtpRoot\general" },
+        @{ Path = "$UserRootDir\$Group";  Target = "$FtpRoot\$Group" }
+    )) {
+        if (-Not (Test-Path $JuncInfo.Path)) {
+            New-Item -ItemType Junction -Path $JuncInfo.Path -Target $JuncInfo.Target | Out-Null
+            Write-LogInfo "Junction creado: $($JuncInfo.Path) -> $($JuncInfo.Target)"
         } else {
-            Write-LogInfo "Directorio Virtual $VirtualPath ya existe."
+            Write-LogInfo "Junction $($JuncInfo.Path) ya existe."
         }
     }
-
-    Ensure-VirtualDirectory "/LocalUser/$Username"         $UserRootDir
-    Ensure-VirtualDirectory "/LocalUser/$Username/general" "$FtpRoot\general"
-    Ensure-VirtualDirectory "/LocalUser/$Username/$Group"  "$FtpRoot\$Group"
 
     Write-LogSuccess "Entorno virtual FTP e IIS configurado exitosamente para $Username."
 }
@@ -451,14 +444,16 @@ function Change-FtpUserGroup {
     }
     Add-LocalGroupMember -Group $NewGroup -Member $Username
 
-    if ($OldGroup -and (Get-WebVirtualDirectory -Site "AutomatedFTP" -Application "/LocalUser/$Username" -Name $OldGroup -ErrorAction SilentlyContinue)) {
-        Remove-WebVirtualDirectory -Site "AutomatedFTP" -Application "/LocalUser/$Username" -Name $OldGroup -Force | Out-Null
-        Write-LogInfo "Enlace virtual de IIS para $OldGroup eliminado de /LocalUser/$Username."
+    # Eliminar junction del grupo anterior y crear el nuevo
+    $UserHome = "$FtpRoot\LocalUser\$Username"
+    if ($OldGroup -and (Test-Path "$UserHome\$OldGroup")) {
+        cmd /c rmdir "$UserHome\$OldGroup" 2>$null
+        Write-LogInfo "Junction de $OldGroup eliminado."
     }
 
-    if (-Not (Get-WebVirtualDirectory -Site "AutomatedFTP" -Application "/LocalUser/$Username" -Name $NewGroup -ErrorAction SilentlyContinue)) {
-        New-WebVirtualDirectory -Site "AutomatedFTP" -Name $NewGroup -PhysicalPath "$FtpRoot\$NewGroup" -Application "/LocalUser/$Username" -Force | Out-Null
-        Write-LogInfo "Enlace virtual nuevo mapeado: /LocalUser/$Username/$NewGroup -> $FtpRoot\$NewGroup"
+    if (-Not (Test-Path "$UserHome\$NewGroup")) {
+        New-Item -ItemType Junction -Path "$UserHome\$NewGroup" -Target "$FtpRoot\$NewGroup" | Out-Null
+        Write-LogInfo "Junction creado: $UserHome\$NewGroup -> $FtpRoot\$NewGroup"
     }
 
     Write-LogSuccess "Migración completada exitosamente. $Username ahora pertenece exclusivamente a $NewGroup."
