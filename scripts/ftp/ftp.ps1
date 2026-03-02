@@ -121,31 +121,19 @@ function Configure-IISFtp {
 
     $SiteName = "AutomatedFTP"
 
-    # Remover el sitio por defecto si estorba
+    # 1. Eliminar el sitio si existe
+    if (Get-WebSite -Name $SiteName -ErrorAction SilentlyContinue) {
+        Remove-WebSite -Name $SiteName -Confirm:$false | Out-Null
+        Write-LogInfo "Sitio FTP anterior eliminado."
+    }
+
     if (Get-WebSite "Default FTP Site" -ErrorAction SilentlyContinue) {
-        Remove-WebSite -Name "Default FTP Site" | Out-Null
+        Remove-WebSite -Name "Default FTP Site" -Confirm:$false | Out-Null
     }
 
-    if (Test-Path "IIS:\Sites\$SiteName") {
-        Write-LogSuccess "El sitio $SiteName ya está creado en IIS."
-    } else {
-        # Crear sitio FTP 
-        New-WebSite -Name $SiteName -PhysicalPath $FtpRoot -Port 21 -Force | Out-Null
-        
-        # Configurar Aislamiento (User Isolation). 
-        # IsolateUsers=2 (Isolation by physical and virtual directories using user name)
-        Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
-
-        # Configurar Inicio de sesión
-        Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.authentication.basicAuthentication.enabled" -Value $True
-        Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.authentication.anonymousAuthentication.enabled" -Value $True
-
-        # Permisos Globales (Authorization Rules) -> Las NTFS harán el filtrado real, 
-        # pero IIS Autoriza conexiones iniciales
-        Add-WebConfigurationProperty -Filter "/system.ftpServer/security/authorization" -Name "." -Value @{accessType="Allow";users="*";permissions="Read,Write"} -PSPath "IIS:\Sites\$SiteName"
-
-        Write-LogSuccess "Sitio $SiteName de IIS FTP creado con Aislamiento de Usuario."
-    }
+    # 2. Crear sitio FTP REAL
+    New-WebFtpSite -Name $SiteName -Port 21 -PhysicalPath $FtpRoot -Force | Out-Null
+    Write-LogSuccess "Sitio FTP real $SiteName creado en el puerto 21."
 
     Write-LogInfo "Asegurando soporte FTPS y Modo Pasivo..."
 
@@ -163,17 +151,56 @@ function Configure-IISFtp {
         Write-LogSuccess "El certificado SSL Autofirmado ya existe."
     }
 
-    # Aplicarlo al binding predeterminado FTP si no está aplicado
-    $Binding = Get-WebBinding -Name $SiteName -Protocol "ftp"
-    if ($null -eq $Binding.BindingInformation) {
-        # Asociar SSL Security Control
-        Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.serverCertHash" -Value $Cert.Thumbprint
-        Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value "SslAllow"
-        Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.dataChannelPolicy" -Value "SslAllow"
-        Write-LogSuccess "Control FTPS asociado al sitio $SiteName."
-    }
+    # 7. Configurar SSL correctamente (Opcional)
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.serverCertHash" -Value $Cert.Thumbprint
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value 1
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.dataChannelPolicy" -Value 1
+    Write-LogSuccess "Control FTPS asociado al sitio $SiteName (SSL Opcional)."
+
+    # 6. Configurar aislamiento (2 = LocalUser)
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
+
+    # 4. Configurar autenticación
+    Set-WebConfigurationProperty -Filter "/system.ftpServer/security/authentication/anonymousAuthentication" -Name enabled -Value $true -PSPath "IIS:\Sites\$SiteName"
+    Set-WebConfigurationProperty -Filter "/system.ftpServer/security/authentication/basicAuthentication" -Name enabled -Value $true -PSPath "IIS:\Sites\$SiteName"
+
+    # 5. Configurar autorización correcta (Limpiar primero)
+    Clear-WebConfiguration -Filter "/system.ftpServer/security/authorization" -PSPath "IIS:\Sites\$SiteName"
     
-    Restart-Service -Name "ftpsvc" -Force
+    Add-WebConfiguration -Filter "/system.ftpServer/security/authorization" -Value @{
+        accessType="Allow";
+        users="Anonymous";
+        permissions="Read"
+    } -PSPath "IIS:\Sites\$SiteName"
+
+    Add-WebConfiguration -Filter "/system.ftpServer/security/authorization" -Value @{
+        accessType="Allow";
+        roles="ftpusers";
+        permissions="Read,Write"
+    } -PSPath "IIS:\Sites\$SiteName"
+
+    Write-LogSuccess "Seguridad, roles y aislamiento aplicados y verificados."
+
+    # 3. Iniciar sitio explícitamente
+    Start-WebSite -Name $SiteName
+
+    # 8. Reiniciar servicio FTP
+    Restart-Service ftpsvc -Force
+
+    # 9. Validación final obligatoria
+    $Binding = Get-WebBinding -Name $SiteName
+    if ($Binding.Protocol -eq "ftp") {
+        Write-LogSuccess "Validacion OK: Protocolo de IIS de $SiteName es FTP"
+    } else {
+        Write-LogError "Validacion FALLIDA: Protocolo de IIS es $($Binding.Protocol) (No es FTP)"
+    }
+
+    $NetStat = netstat -an | findstr ":21" | findstr "LISTENING"
+    if ($NetStat) {
+        Write-LogSuccess "Validacion OK: Puerto 21 en estado LISTENING"
+    } else {
+        Write-LogError "Validacion FALLIDA: Puerto 21 NO esta a la escucha."
+    }
 }
 
 # ==============================================================================
