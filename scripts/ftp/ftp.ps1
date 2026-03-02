@@ -39,13 +39,13 @@ function Install-Packages {
 
     # ===========================================================================
     # LISTA COMPLETA DE FEATURES REQUERIDAS (idempotente)
-    # - Web-Server      : Motor IIS base. Registra W3SVC y WAS (requeridos por
-    #                     WebAdministration y Start-WebSite / New-WebFtpSite).
-    # - Web-WebServer   : Rol padre del servidor web (necesario para Web-Server).
-    # - Web-Ftp-Server  : Rol padre FTP.
-    # - Web-Ftp-Service : Servicio FTP real (ftpsvc).
-    # - Web-Ftp-Ext     : Extensibilidad FTP para configurar via PowerShell/WMI.
-    # - Web-Mgmt-Console: IIS Manager GUI (util para diagnóstico).
+    # - Web-Server         : Motor IIS base. Registra W3SVC y WAS (requeridos por
+    #                        WebAdministration y Start-WebSite / New-WebFtpSite).
+    # - Web-WebServer      : Rol padre del servidor web (necesario para Web-Server).
+    # - Web-Ftp-Server     : Rol padre FTP.
+    # - Web-Ftp-Service    : Servicio FTP real (ftpsvc).
+    # - Web-Ftp-Ext        : Extensibilidad FTP para configurar via PowerShell/WMI.
+    # - Web-Mgmt-Console   : IIS Manager GUI (util para diagnóstico).
     # - Web-Scripting-Tools: appcmd.exe y WebAdministration completo.
     # ===========================================================================
     $Features = @(
@@ -193,7 +193,7 @@ function Configure-IISFtp {
         Write-LogSuccess "El certificado SSL Autofirmado ya existe."
     }
 
-    # Configurar SSL (Opcional - controlChannelPolicy=0 significa que SSL es opcional, 1 es requerido)
+    # SSL Opcional (0 = permite texto plano y SSL, no fuerza cifrado)
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.serverCertHash"       -Value $Cert.Thumbprint
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value 0
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.dataChannelPolicy"    -Value 0
@@ -208,8 +208,8 @@ function Configure-IISFtp {
 
     # Autorización (limpiar y reconfigurar — idempotente)
     & $AppCmd clear config "$SiteName" -section:system.ftpServer/security/authorization /commit:apphost | Out-Null
-    & $AppCmd set config   "$SiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',users='Anonymous',permissions='Read']"           /commit:apphost | Out-Null
-    & $AppCmd set config   "$SiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',roles='ftpusers',permissions='Read, Write']"     /commit:apphost | Out-Null
+    & $AppCmd set config   "$SiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',users='Anonymous',permissions='Read']"       /commit:apphost | Out-Null
+    & $AppCmd set config   "$SiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',roles='ftpusers',permissions='Read, Write']" /commit:apphost | Out-Null
 
     Write-LogSuccess "Seguridad, roles y aislamiento aplicados y verificados."
 
@@ -265,26 +265,57 @@ function Configure-Firewall {
     Write-LogSuccess "Firewall de Windows configurado (Stateful FTP Global activado)."
 }
 
+# ==============================================================================
+# 4. POLITICAS DE SEGURIDAD LOCAL
+# ==============================================================================
 function Configure-LocalSecurityPolicy {
-    Write-LogWarn "Deshabilitando requisitos de complejidad y longitud de contraseñas locales (secedit)..."
+    Write-LogWarn "Configurando políticas de seguridad locales para FTP (secedit)..."
 
-    $CfgFile = "$env:TEMP\secpol.inf"
+    $CfgFile = "$env:TEMP\secpol_ftp.inf"
     secedit /export /cfg $CfgFile /Quiet | Out-Null
 
     $Content = Get-Content $CfgFile -Encoding Unicode
-    $Content = $Content -replace "(?i)^PasswordComplexity\s*=\s*1",    "PasswordComplexity = 0"
+
+    # --- Contraseñas ---
+    # Deshabilitar complejidad y longitud mínima para permitir contraseñas simples en FTP
+    $Content = $Content -replace "(?i)^PasswordComplexity\s*=\s*1",      "PasswordComplexity = 0"
     $Content = $Content -replace "(?i)^MinimumPasswordLength\s*=\s*\d+", "MinimumPasswordLength = 0"
+
+    # --- Logon de Red (CRÍTICO para FTP) ---
+    # SeDenyNetworkLogonRight: si contiene ftpusers o usuarios FTP, Windows lanza
+    # win32 error 1326 (ERROR_LOGON_FAILURE) antes de que IIS pueda autenticar.
+    # Lo dejamos vacío para que no deniegue explícitamente a ningún grupo FTP.
+    $Content = $Content -replace "(?i)^SeDenyNetworkLogonRight\s*=.*", "SeDenyNetworkLogonRight = "
+
+    # SeNetworkLogonRight: garantizar que ftpusers tenga derecho de logon de red.
+    # IIS FTP autentica via network logon internamente — sin este derecho, 530.
+    $NetworkLogonLine = $Content | Where-Object { $_ -match "(?i)^SeNetworkLogonRight\s*=" }
+    if ($NetworkLogonLine) {
+        if ($NetworkLogonLine -notmatch "ftpusers") {
+            $Content = $Content -replace "(?i)^(SeNetworkLogonRight\s*=\s*.*)", "`$1,*ftpusers"
+            Write-LogInfo "Grupo ftpusers agregado a SeNetworkLogonRight."
+        } else {
+            Write-LogSuccess "ftpusers ya tiene SeNetworkLogonRight."
+        }
+    } else {
+        # Si la línea no existe en el .inf, crearla en la sección [Privilege Rights]
+        # *S-1-5-32-544 = Administrators, *S-1-5-32-545 = Users
+        $Content = $Content -replace "(\[Privilege Rights\])", "`$1`r`nSeNetworkLogonRight = *S-1-5-32-544,*S-1-5-32-545,*ftpusers"
+        Write-LogInfo "SeNetworkLogonRight creado con Administrators, Users y ftpusers."
+    }
+
     $Content | Set-Content $CfgFile -Encoding Unicode -Force
 
     secedit /configure /db $env:windir\security\local.sdb /cfg $CfgFile /areas SECURITYPOLICY /Quiet | Out-Null
 
+    # Complemento via net accounts
     net accounts /maxpwage:unlimited /minpwlen:0 /minpwage:0 | Out-Null
 
-    Write-LogSuccess "Restricciones de contraseña locales eliminadas."
+    Write-LogSuccess "Políticas de seguridad locales configuradas (contraseñas y logon de red FTP)."
 }
 
 # ==============================================================================
-# 4. GESTIÓN DE USUARIOS
+# 5. GESTIÓN DE USUARIOS
 # ==============================================================================
 
 function Get-FtpUserVirtualDirectories ($Username) {
@@ -302,24 +333,30 @@ function Create-FtpUser {
 
     # 1. Crear Usuario de Windows
     if (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue) {
-        Write-LogWarn "El usuario local de Windows $Username ya existe. Configurando estructura FTP en IIS..."
+        Write-LogWarn "El usuario local de Windows $Username ya existe. Verificando membresías y estructura FTP..."
     } else {
         $SecurePassword = ConvertTo-SecureString $Password -AsPlainText -Force
         New-LocalUser -Name $Username -Password $SecurePassword -Description "Automated FTP User" -AccountNeverExpires | Out-Null
-
-        Remove-LocalGroupMember -Group "Users" -Member $Username -ErrorAction SilentlyContinue
-
-        Add-LocalGroupMember -Group $Group     -Member $Username
-        Add-LocalGroupMember -Group "ftpusers" -Member $Username
-        
-        # Vital para IIS: Un usuario sin grupo 'Users' no puede hacer 'Log On'.
-        # IIS_IUSRS les otorga el permiso de autenticación Web/FTP ('Log on as a batch job' / Network).
-        Add-LocalGroupMember -Group "IIS_IUSRS" -Member $Username -ErrorAction SilentlyContinue
-
-        Write-LogSuccess "Usuario $Username creado y asignado a $Group, ftpusers e IIS_IUSRS."
+        Write-LogSuccess "Usuario local $Username creado."
     }
 
-    # 2. Directorio raíz del usuario (chroot físico requerido por IIS User Isolation)
+    # 2. Membresías de grupos
+    # IMPORTANTE — por qué cada grupo es necesario:
+    #   $Group    : acceso a la carpeta compartida de su categoría (reprobados/recursadores)
+    #   ftpusers  : regla de autorización IIS FTP (roles='ftpusers' en appcmd)
+    #   Users     : Windows requiere este grupo para permitir network logon (win32 1326 sin él)
+    #   IIS_IUSRS : el worker process de IIS necesita acceso de lectura a los directorios del usuario
+    foreach ($Grp in @($Group, "ftpusers", "Users", "IIS_IUSRS")) {
+        $IsMember = Get-LocalGroupMember -Group $Grp -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -like "*\$Username" -or $_.Name -eq $Username }
+        if (-Not $IsMember) {
+            Add-LocalGroupMember -Group $Grp -Member $Username -ErrorAction SilentlyContinue
+            Write-LogInfo "Usuario $Username agregado al grupo $Grp."
+        }
+    }
+    Write-LogSuccess "Membresías de $Username verificadas: $Group, ftpusers, Users, IIS_IUSRS."
+
+    # 3. Directorio raíz del usuario (chroot físico requerido por IIS User Isolation)
     $UserRootDir = "$FtpRoot\LocalUser\$Username"
     if (-Not (Test-Path $UserRootDir)) {
         New-Item -Path $UserRootDir -ItemType Directory -Force | Out-Null
@@ -327,12 +364,12 @@ function Create-FtpUser {
 
     $AclHome = Get-Acl $UserRootDir
     $AclHome.SetAccessRuleProtection($True, $False)
-    $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl",      "ContainerInherit,ObjectInherit", "None", "Allow")))
-    $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($Username,        "Modify",           "ContainerInherit,ObjectInherit", "None", "Allow")))
-    $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("IIS_IUSRS",     "ReadAndExecute",   "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl",    "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($Username,        "Modify",         "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("IIS_IUSRS",     "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
     Set-Acl -Path $UserRootDir -AclObject $AclHome
 
-    # 3. Directorios Virtuales IIS (bind-mount de Windows)
+    # 4. Directorios Virtuales IIS (bind-mount de Windows)
     function Ensure-VirtualDirectory ($VirtualPath, $PhysicalPath) {
         $Name    = $VirtualPath.Split('/')[-1]
         $AppPath = $VirtualPath.Substring(0, $VirtualPath.LastIndexOf('/'))
@@ -346,9 +383,9 @@ function Create-FtpUser {
         }
     }
 
-    Ensure-VirtualDirectory "/LocalUser/$Username"          $UserRootDir
-    Ensure-VirtualDirectory "/LocalUser/$Username/general"  "$FtpRoot\general"
-    Ensure-VirtualDirectory "/LocalUser/$Username/$Group"   "$FtpRoot\$Group"
+    Ensure-VirtualDirectory "/LocalUser/$Username"         $UserRootDir
+    Ensure-VirtualDirectory "/LocalUser/$Username/general" "$FtpRoot\general"
+    Ensure-VirtualDirectory "/LocalUser/$Username/$Group"  "$FtpRoot\$Group"
 
     Write-LogSuccess "Entorno virtual FTP e IIS configurado exitosamente para $Username."
 }
@@ -370,7 +407,7 @@ function Change-FtpUserGroup {
     } | Select-Object -ExpandProperty Name)
 
     $OldGroup = ""
-    if ($OldGroups -contains "reprobados")   { $OldGroup = "reprobados" }
+    if ($OldGroups -contains "reprobados")       { $OldGroup = "reprobados" }
     elseif ($OldGroups -contains "recursadores") { $OldGroup = "recursadores" }
 
     if ($OldGroup -eq $NewGroup) {
@@ -399,7 +436,7 @@ function Change-FtpUserGroup {
 }
 
 # ==============================================================================
-# 5. MENÚ INTERACTIVO Y FLUJO NORMAL
+# 6. MENÚ INTERACTIVO Y FLUJO NORMAL
 # ==============================================================================
 
 function Interactive-Menu {
@@ -456,7 +493,7 @@ function Interactive-Menu {
 }
 
 # ==============================================================================
-# 6. MANTENIMIENTO: PURGE, HELP, Y LIST
+# 7. MANTENIMIENTO: PURGE, HELP, Y LIST
 # ==============================================================================
 function Show-Help {
     Write-Host "Uso: .\ftp.ps1 [OPCION]"
@@ -486,7 +523,7 @@ function List-Users {
             } | Select-Object -ExpandProperty Name)
 
             $GrupoPrincipal = ""
-            if ($GrpList -contains "reprobados")     { $GrupoPrincipal = "reprobados" }
+            if ($GrpList -contains "reprobados")       { $GrupoPrincipal = "reprobados" }
             elseif ($GrpList -contains "recursadores") { $GrupoPrincipal = "recursadores" }
             else                                       { $GrupoPrincipal = "Generico" }
 
