@@ -394,6 +394,17 @@ function Create-FtpUser {
     $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("IUSR",          "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
     Set-Acl -Path $UserRootDir -AclObject $AclHome
 
+    # Carpeta personal del usuario (equivalente a $u_home/$username con chmod 700 en Linux)
+    $PersonalDir = "$UserRootDir\$Username"
+    if (-Not (Test-Path $PersonalDir)) {
+        New-Item -Path $PersonalDir -ItemType Directory -Force | Out-Null
+    }
+    $AclPersonal = Get-Acl $PersonalDir
+    $AclPersonal.SetAccessRuleProtection($True, $False)
+    $AclPersonal.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $AclPersonal.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($Username, "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    Set-Acl -Path $PersonalDir -AclObject $AclPersonal
+
     # 4. Junction Points (equivalente a mount --bind en Linux)
     # Con User Isolation, IIS FTP solo muestra directorios físicos.
     # Los NTFS Junctions enlazan carpetas compartidas dentro del chroot del usuario.
