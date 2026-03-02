@@ -203,8 +203,10 @@ function Configure-IISFtp {
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
 
     # Autenticacion
-    & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/anonymousAuthentication /enabled:"True"  /commit:apphost | Out-Null
     & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/basicAuthentication     /enabled:"True"  /commit:apphost | Out-Null
+    
+    # Habilitar Anónimo y mapearlo forzosamente a IUSR (requerido por IIS FTP para no dar 530)
+    & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/anonymousAuthentication /enabled:"True" /userName:"IUSR" /commit:apphost | Out-Null
 
     # Autorización (limpiar y reconfigurar — idempotente)
     & $AppCmd clear config "$SiteName" -section:system.ftpServer/security/authorization /commit:apphost | Out-Null
@@ -367,6 +369,7 @@ function Create-FtpUser {
     $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl",    "ContainerInherit,ObjectInherit", "None", "Allow")))
     $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($Username,        "Modify",         "ContainerInherit,ObjectInherit", "None", "Allow")))
     $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("IIS_IUSRS",     "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $AclHome.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("IUSR",          "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
     Set-Acl -Path $UserRootDir -AclObject $AclHome
 
     # 4. Directorios Virtuales IIS (bind-mount de Windows)
