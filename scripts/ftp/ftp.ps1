@@ -150,8 +150,8 @@ function Configure-IISFtp {
     Write-LogInfo "Asegurando soporte FTPS y Modo Pasivo..."
 
     # MODO PASIVO IIS (a nivel de aplicación general)
-    Set-ItemProperty "IIS:\" -Name "ftpServer.firewallSupport.lowDataChannelPort" -Value 40000
-    Set-ItemProperty "IIS:\" -Name "ftpServer.firewallSupport.highDataChannelPort" -Value 40100
+    Set-WebConfigurationProperty -Filter "/system.ftpServer/firewallSupport" -Name lowDataChannelPort -Value 40000
+    Set-WebConfigurationProperty -Filter "/system.ftpServer/firewallSupport" -Name highDataChannelPort -Value 40100
 
     # Certificado Autofirmado
     $CertSubject = "CN=FtpLocalServer"
