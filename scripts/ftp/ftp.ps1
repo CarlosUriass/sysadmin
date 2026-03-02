@@ -434,14 +434,15 @@ function Change-FtpUserGroup {
         Write-LogError "El grupo nuevo ($NewGroup) es inválido. Reprobados o Recursadores."
     }
 
-    $Principal = New-Object Security.Principal.NTAccount($Username)
-    $OldGroups = (Get-LocalGroup | Where-Object {
-        ($_ | Get-LocalGroupMember -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name) -contains $Principal.Value
-    } | Select-Object -ExpandProperty Name)
-
+    # Detectar grupo actual
     $OldGroup = ""
-    if ($OldGroups -contains "reprobados")       { $OldGroup = "reprobados" }
-    elseif ($OldGroups -contains "recursadores") { $OldGroup = "recursadores" }
+    foreach ($Grp in @("reprobados", "recursadores")) {
+        $Members = Get-LocalGroupMember -Group $Grp -ErrorAction SilentlyContinue
+        if ($Members | Where-Object { $_.Name -like "*\$Username" }) {
+            $OldGroup = $Grp
+            break
+        }
+    }
 
     if ($OldGroup -eq $NewGroup) {
         Write-LogSuccess "El usuario $Username ya se encuentra en el grupo $NewGroup. Nada qué hacer."
