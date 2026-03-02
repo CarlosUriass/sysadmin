@@ -215,18 +215,34 @@ function Configure-IISFtp {
 
     Write-LogSuccess "Seguridad, roles y aislamiento aplicados y verificados."
 
-    # Iniciar sitio via appcmd (evita la dependencia de COM de Start-WebSite)
-    $StartResult = & $AppCmd start site /site.name:"$SiteName" 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-LogSuccess "Sitio $SiteName iniciado correctamente via appcmd."
-    } else {
-        Write-LogWarn "appcmd start site: $StartResult - intentando fallback Start-WebSite..."
-        try { Start-WebSite -Name $SiteName -ErrorAction Stop }
-        catch { Write-LogWarn "Start-WebSite tambien reporto fallo: $_. Continuando..." }
+    # Reiniciar ftpsvc ANTES de iniciar sitio para que IIS propague el nuevo
+    # objeto FTP en la metabase COM.  Sin esto, appcmd/Start-WebSite lanzan
+    # 0x800710D8 ("The object identifier does not represent a valid object").
+    Restart-Service ftpsvc -Force
+    Start-Sleep -Seconds 3
+
+    # Iniciar sitio con reintentos (la metabase puede tardar unos segundos)
+    $SiteStarted = $false
+    for ($retry = 1; $retry -le 3; $retry++) {
+        $StartResult = & $AppCmd start site /site.name:"$SiteName" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-LogSuccess "Sitio $SiteName iniciado correctamente via appcmd."
+            $SiteStarted = $true
+            break
+        }
+        Write-LogWarn "Intento $retry/3 appcmd start site: $StartResult"
+        Start-Sleep -Seconds 2
     }
 
-    # Reiniciar servicio FTP
-    Restart-Service ftpsvc -Force
+    if (-Not $SiteStarted) {
+        Write-LogWarn "appcmd no pudo iniciar el sitio. Intentando fallback Start-WebSite..."
+        try {
+            Start-WebSite -Name $SiteName -ErrorAction Stop
+            Write-LogSuccess "Sitio $SiteName iniciado via Start-WebSite."
+        } catch {
+            Write-LogWarn "Start-WebSite tambien reporto fallo: $_. Verificando estado real..."
+        }
+    }
 
     # Validación final
     $Binding = Get-WebBinding -Name $SiteName -ErrorAction SilentlyContinue
