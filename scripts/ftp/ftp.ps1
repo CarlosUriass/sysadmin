@@ -199,8 +199,8 @@ function Configure-IISFtp {
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.ssl.dataChannelPolicy"    -Value 0
     Write-LogSuccess "Control FTPS asociado al sitio $SiteName (SSL Totalmente Opcional/Texto Plano Permitido)."
 
-    # Aislamiento de usuarios (chroot equivalente)
-    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 3
+    # Aislamiento de usuarios (modo 2 = IsolateRootDirectoryOnly, chroot a LocalUser/<username>)
+    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
 
     # Autenticación: Basic habilitado, Anónimo deshabilitado (interfiere con User Isolation)
     & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/basicAuthentication     /enabled:"True"  /commit:apphost | Out-Null
