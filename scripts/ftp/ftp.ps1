@@ -296,7 +296,7 @@ function Configure-LocalSecurityPolicy {
 
     $Content | Set-Content $CfgFile -Encoding Unicode -Force
 
-    secedit /configure /db $env:windir\security\local.sdb /cfg $CfgFile /areas SECURITYPOLICY /Quiet | Out-Null
+    secedit /configure /db $env:windir\security\local.sdb /cfg $CfgFile /areas SECURITYPOLICY,USER_RIGHTS /Quiet | Out-Null
 
     # Complemento via net accounts
     net accounts /maxpwage:unlimited /minpwlen:0 /minpwage:0 | Out-Null
