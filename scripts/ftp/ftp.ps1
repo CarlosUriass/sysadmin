@@ -311,7 +311,12 @@ function Create-FtpUser {
 
         Add-LocalGroupMember -Group $Group     -Member $Username
         Add-LocalGroupMember -Group "ftpusers" -Member $Username
-        Write-LogSuccess "Usuario $Username creado y asignado a $Group y ftpusers."
+        
+        # Vital para IIS: Un usuario sin grupo 'Users' no puede hacer 'Log On'.
+        # IIS_IUSRS les otorga el permiso de autenticación Web/FTP ('Log on as a batch job' / Network).
+        Add-LocalGroupMember -Group "IIS_IUSRS" -Member $Username -ErrorAction SilentlyContinue
+
+        Write-LogSuccess "Usuario $Username creado y asignado a $Group, ftpusers e IIS_IUSRS."
     }
 
     # 2. Directorio raíz del usuario (chroot físico requerido por IIS User Isolation)
