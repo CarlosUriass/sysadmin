@@ -203,8 +203,8 @@ function Configure-IISFtp {
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
 
     # Autenticación: Basic habilitado, Anónimo deshabilitado
-    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.authentication.basicAuthentication.enabled" -Value $true
-    Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.security.authentication.anonymousAuthentication.enabled" -Value $false
+    Set-WebConfigurationProperty -PSPath "IIS:\" -Location "$SiteName" -Filter "system.ftpServer/security/authentication/basicAuthentication" -Name "enabled" -Value $true
+    Set-WebConfigurationProperty -PSPath "IIS:\" -Location "$SiteName" -Filter "system.ftpServer/security/authentication/anonymousAuthentication" -Name "enabled" -Value $false
 
     # Autorización: solo ftpusers con lectura y escritura
     & $AppCmd clear config "$SiteName" -section:system.ftpServer/security/authorization /commit:apphost | Out-Null
