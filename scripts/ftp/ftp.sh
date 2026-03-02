@@ -105,6 +105,12 @@ configurar_vsftpd() {
         log_success "Certificado SSL generado."
     fi
 
+    # Permitir a usuarios con shell nologin autenticarse en FTP
+    if ! grep -q "/usr/sbin/nologin" /etc/shells; then
+        echo "/usr/sbin/nologin" >> /etc/shells
+        log_success "Shell /usr/sbin/nologin agregado a /etc/shells para permitir FTP."
+    fi
+
     # Escribir configuración (sobrescribe para asegurar estado deseado - idempotente)
     cat <<EOF > "$VS_CONF"
 listen=YES
