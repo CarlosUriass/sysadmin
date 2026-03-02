@@ -195,6 +195,16 @@ function Configure-Firewall {
             Write-LogSuccess "Regla de Firewall agregada: $($Rule.Name) Puerto(s): $($Rule.Port)"
         }
     }
+    
+    # Habilitar inspeccion de estado FTP (Crucial para clientes externos pase Pasivo FTP libremente)
+    $StatefulFTP = Get-NetFirewallRule -DisplayName "FTP-Server-Stateful" -ErrorAction SilentlyContinue
+    if (-Not $StatefulFTP) {
+        New-NetFirewallRule -DisplayName "FTP-Server-Stateful" -Direction Inbound -Protocol TCP -LocalPort 21 -Action Allow -Service "ftpsvc" | Out-Null
+        # Forzar la carga del modulo ALG si el firewall lo droppea externamente
+        netsh advfirewall firewall add rule name="FTP-Internet" action=allow protocol=TCP dir=in localport=21 > $null
+        Write-LogSuccess "Inspeccion de estado y acceso desde Internet para FTP habilitado."
+    }
+
     Write-LogSuccess "Firewall de Windows configurado."
 }
 
