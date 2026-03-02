@@ -215,32 +215,30 @@ function Configure-IISFtp {
 
     Write-LogSuccess "Seguridad, roles y aislamiento aplicados y verificados."
 
-    # Reiniciar ftpsvc ANTES de iniciar sitio para que IIS propague el nuevo
-    # objeto FTP en la metabase COM.  Sin esto, appcmd/Start-WebSite lanzan
-    # 0x800710D8 ("The object identifier does not represent a valid object").
+    # Reiniciar ftpsvc para que IIS propague el nuevo sitio FTP en su metabase COM.
     Restart-Service ftpsvc -Force
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 2
 
-    # Iniciar sitio con reintentos (la metabase puede tardar unos segundos)
-    $SiteStarted = $false
-    for ($retry = 1; $retry -le 3; $retry++) {
+    # Verificar si el sitio ya quedó iniciado tras el reinicio de ftpsvc.
+    # En la mayoría de entornos, Restart-Service inicia todos los sitios FTP
+    # automáticamente, por lo que appcmd start site lanza 0x800710D8 si se
+    # intenta iniciar un sitio que ya está corriendo.
+    $SiteState = & $AppCmd list site /name:"$SiteName" /text:state 2>&1
+    if ($SiteState -match "Started") {
+        Write-LogSuccess "Sitio $SiteName ya se encuentra iniciado (auto-start tras reinicio ftpsvc)."
+    } else {
+        Write-LogInfo "Estado del sitio: $SiteState. Intentando iniciar..."
         $StartResult = & $AppCmd start site /site.name:"$SiteName" 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-LogSuccess "Sitio $SiteName iniciado correctamente via appcmd."
-            $SiteStarted = $true
-            break
-        }
-        Write-LogWarn "Intento $retry/3 appcmd start site: $StartResult"
-        Start-Sleep -Seconds 2
-    }
-
-    if (-Not $SiteStarted) {
-        Write-LogWarn "appcmd no pudo iniciar el sitio. Intentando fallback Start-WebSite..."
-        try {
-            Start-WebSite -Name $SiteName -ErrorAction Stop
-            Write-LogSuccess "Sitio $SiteName iniciado via Start-WebSite."
-        } catch {
-            Write-LogWarn "Start-WebSite tambien reporto fallo: $_. Verificando estado real..."
+        } else {
+            Write-LogWarn "appcmd start site: $StartResult. Intentando Start-WebSite..."
+            try {
+                Start-WebSite -Name $SiteName -ErrorAction Stop
+                Write-LogSuccess "Sitio $SiteName iniciado via Start-WebSite."
+            } catch {
+                Write-LogWarn "Start-WebSite fallo: $_. Verificando puerto 21..."
+            }
         }
     }
 
