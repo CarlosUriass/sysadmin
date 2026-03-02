@@ -138,8 +138,8 @@ function Configure-IISFtp {
     Write-LogInfo "Asegurando soporte FTPS y Modo Pasivo..."
 
     # MODO PASIVO IIS (a nivel de aplicación general)
-    Set-WebConfigurationProperty -Filter "/system.ftpServer/firewallSupport" -Name lowDataChannelPort -Value 40000
-    Set-WebConfigurationProperty -Filter "/system.ftpServer/firewallSupport" -Name highDataChannelPort -Value 40100
+    & $env:windir\system32\inetsrv\appcmd.exe set config -section:system.ftpServer/firewallSupport /lowDataChannelPort:"40000" /commit:apphost | Out-Null
+    & $env:windir\system32\inetsrv\appcmd.exe set config -section:system.ftpServer/firewallSupport /highDataChannelPort:"40100" /commit:apphost | Out-Null
 
     # Certificado Autofirmado
     $CertSubject = "CN=FtpLocalServer"
@@ -160,24 +160,17 @@ function Configure-IISFtp {
     # 6. Configurar aislamiento (2 = LocalUser)
     Set-ItemProperty "IIS:\Sites\$SiteName" -Name "ftpServer.userIsolation.mode" -Value 2
 
-    # 4. Configurar autenticación
-    Set-WebConfigurationProperty -Filter "/system.ftpServer/security/authentication/anonymousAuthentication" -Name enabled -Value $true -PSPath "IIS:\Sites\$SiteName"
-    Set-WebConfigurationProperty -Filter "/system.ftpServer/security/authentication/basicAuthentication" -Name enabled -Value $true -PSPath "IIS:\Sites\$SiteName"
+    $AppCmd = "$env:windir\system32\inetsrv\appcmd.exe"
 
-    # 5. Configurar autorización correcta (Limpiar primero)
-    Clear-WebConfiguration -Filter "/system.ftpServer/security/authorization" -PSPath "IIS:\Sites\$SiteName"
+    # 4. Configurar autenticacion
+    & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/anonymousAuthentication /enabled:"True" /commit:apphost | Out-Null
+    & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authentication/basicAuthentication /enabled:"True" /commit:apphost | Out-Null
+
+    # 5. Configurar autorizacion correcta (Limpiar primero y luego agregar)
+    & $AppCmd clear config "$SiteName" -section:system.ftpServer/security/authorization /commit:apphost | Out-Null
     
-    Add-WebConfiguration -Filter "/system.ftpServer/security/authorization" -Value @{
-        accessType="Allow";
-        users="Anonymous";
-        permissions="Read"
-    } -PSPath "IIS:\Sites\$SiteName"
-
-    Add-WebConfiguration -Filter "/system.ftpServer/security/authorization" -Value @{
-        accessType="Allow";
-        roles="ftpusers";
-        permissions="Read,Write"
-    } -PSPath "IIS:\Sites\$SiteName"
+    & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',users='Anonymous',permissions='Read']" /commit:apphost | Out-Null
+    & $AppCmd set config "$SiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',roles='ftpusers',permissions='Read, Write']" /commit:apphost | Out-Null
 
     Write-LogSuccess "Seguridad, roles y aislamiento aplicados y verificados."
 
