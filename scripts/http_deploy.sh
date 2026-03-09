@@ -192,7 +192,6 @@ obtener_versiones_nginx() {
 obtener_versiones_tomcat() {
     log_info "Consultando versiones disponibles de Tomcat..."
 
-    # Verificar Java e instalar con el util de paquetes
     if ! command -v java &>/dev/null; then
         log_warn "Java no encontrado. Instalando OpenJDK 17..."
         apt-get install -y -qq openjdk-17-jdk 2>/dev/null
@@ -203,7 +202,28 @@ obtener_versiones_tomcat() {
     fi
     log_success "Java disponible: $(java -version 2>&1 | head -1)"
 
-    declare -gA TOMCAT_VERSIONES=( ["1"]="9.0.98" ["2"]="10.1.39" ["3"]="11.0.4" )
+    # Consultar versión latest de cada rama desde la API de Apache
+    log_info "Consultando versiones actuales desde dlcdn.apache.org..."
+
+    _get_latest_tomcat() {
+        local rama=$1
+        # Lista el directorio de la rama y extrae la última versión disponible
+        curl -s "https://dlcdn.apache.org/tomcat/tomcat-${rama}/" \
+            | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' \
+            | sort -V | tail -1
+    }
+
+    local v9 v10 v11
+    v9=$(_get_latest_tomcat 9)
+    v10=$(_get_latest_tomcat 10)
+    v11=$(_get_latest_tomcat 11)
+
+    # Fallback si no se pudo consultar
+    [[ -z "$v9"  ]] && v9="9.0.102"
+    [[ -z "$v10" ]] && v10="10.1.40"
+    [[ -z "$v11" ]] && v11="11.0.6"
+
+    declare -gA TOMCAT_VERSIONES=( ["1"]="$v9" ["2"]="$v10" ["3"]="$v11" )
     declare -gA TOMCAT_RAMAS=( ["1"]="9" ["2"]="10" ["3"]="11" )
 
     echo -e "\e[1mVersiones disponibles de Tomcat:\e[0m"
@@ -212,7 +232,6 @@ obtener_versiones_tomcat() {
     echo -e "  \e[1m3)\e[0m Tomcat ${TOMCAT_VERSIONES[3]} \e[1;33m(Rama 11 - Latest, Java 17+)\e[0m"
 
     if [[ "$INTERACTIVO" -eq 0 ]]; then
-        # Tomcat 11 by default
         VERSION_ELEGIDA="${TOMCAT_VERSIONES[3]}"
         TOMCAT_RAMA="${TOMCAT_RAMAS[3]}"
         return 0
