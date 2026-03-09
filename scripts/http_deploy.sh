@@ -234,6 +234,12 @@ instalar_apache() {
     sed -i "s/Listen [0-9]*/Listen $PUERTO_ELEGIDO/g" /etc/apache2/ports.conf
     sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:$PUERTO_ELEGIDO>/g" /etc/apache2/sites-available/000-default.conf
 
+    # Evitar warning AH00558
+    if [[ ! -f /etc/apache2/conf-available/servername.conf ]]; then
+        echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf
+        a2enconf servername &>/dev/null
+    fi
+
     if [[ -f /etc/apache2/conf-available/security.conf ]]; then
         sed -i "s/^ServerTokens .*/ServerTokens Prod/" /etc/apache2/conf-available/security.conf
         sed -i "s/^ServerSignature .*/ServerSignature Off/" /etc/apache2/conf-available/security.conf
@@ -250,7 +256,8 @@ EOF
     configurar_firewall "$PUERTO_ELEGIDO"
 
     log_info "Validando configuración de Apache..."
-    if ! apache2ctl configtest 2>/dev/null | grep -q "Syntax OK"; then
+    # Redirigir stderr a stdout para que configtest pueda leerse
+    if ! apache2ctl configtest 2>&1 | grep -q "Syntax OK"; then
         log_warn "Error detectado en la configuración:"
         apache2ctl configtest
         log_error "La configuración de Apache tiene errores. Abortando reinicio."
