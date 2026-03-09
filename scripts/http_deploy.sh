@@ -374,9 +374,9 @@ instalar_tomcat() {
     log_info "Descargando Tomcat $TOMCAT_VERSION..."
     local TMP_FILE="/tmp/tomcat-${TOMCAT_VERSION}.tar.gz"
 
-    wget -q --show-progress "$TOMCAT_URL" -O "$TMP_FILE" 2>/dev/null
+    wget --show-progress "$TOMCAT_URL" -O "$TMP_FILE"
     if [[ $? -ne 0 || ! -s "$TMP_FILE" ]]; then
-        log_error "Falló la descarga de Tomcat desde $TOMCAT_URL"
+        log_error "Falló la descarga de Tomcat desde $TOMCAT_URL. Verifica la versión o red."
     fi
 
     mkdir -p "$TOMCAT_DIR"
