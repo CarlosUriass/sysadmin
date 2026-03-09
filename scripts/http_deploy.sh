@@ -202,13 +202,11 @@ obtener_versiones_tomcat() {
     fi
     log_success "Java disponible: $(java -version 2>&1 | head -1)"
 
-    # Consultar versión latest de cada rama desde la API de Apache
     log_info "Consultando versiones actuales desde dlcdn.apache.org..."
 
     _get_latest_tomcat() {
         local rama=$1
-        # Lista el directorio de la rama y extrae la última versión disponible
-        curl -s "https://dlcdn.apache.org/tomcat/tomcat-${rama}/" \
+        curl -s --max-time 5 "https://dlcdn.apache.org/tomcat/tomcat-${rama}/" \
             | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' \
             | sort -V | tail -1
     }
@@ -218,10 +216,10 @@ obtener_versiones_tomcat() {
     v10=$(_get_latest_tomcat 10)
     v11=$(_get_latest_tomcat 11)
 
-    # Fallback si no se pudo consultar
-    [[ -z "$v9"  ]] && v9="9.0.102"
-    [[ -z "$v10" ]] && v10="10.1.40"
-    [[ -z "$v11" ]] && v11="11.0.6"
+    # Fallbacks actualizados (marzo 2026)
+    [[ -z "$v9"  ]] && v9="9.0.115"
+    [[ -z "$v10" ]] && v10="10.1.52"
+    [[ -z "$v11" ]] && v11="11.0.18"
 
     declare -gA TOMCAT_VERSIONES=( ["1"]="$v9" ["2"]="$v10" ["3"]="$v11" )
     declare -gA TOMCAT_RAMAS=( ["1"]="9" ["2"]="10" ["3"]="11" )
