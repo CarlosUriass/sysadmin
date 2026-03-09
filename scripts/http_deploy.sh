@@ -240,17 +240,12 @@ instalar_apache() {
         a2enconf security &>/dev/null
     fi
 
-    cat > /etc/apache2/conf-available/security-methods.conf <<'EOF'
-<Location "/">
-    <LimitExcept GET POST HEAD>
-        Require all denied
-    </LimitExcept>
-</Location>
+    cat > /etc/apache2/conf-available/security-headers.conf <<'EOF'
 Header always set X-Frame-Options "SAMEORIGIN"
 Header always set X-Content-Type-Options "nosniff"
 EOF
     a2enmod headers &>/dev/null
-    a2enconf security-methods &>/dev/null
+    a2enconf security-headers &>/dev/null
 
     configurar_firewall "$PUERTO_ELEGIDO"
 
