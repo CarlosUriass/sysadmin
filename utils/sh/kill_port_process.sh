@@ -2,6 +2,9 @@
 
 # Script para matar el proceso asociado a un puerto
 
+# Importar funciones de log
+source "$(dirname "$0")/../logs/logger.sh"
+
 PORT=""
 
 while [[ "$#" -gt 0 ]]; do
@@ -23,8 +26,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [[ -z "$PORT" ]]; then
-    echo "Error: Falta el parámetro --port."
-    exit 1
+    log_error "Falta el parámetro --port."
 fi
 
 # Buscar PIDs en ESTADO LISTEN primero
@@ -37,12 +39,12 @@ fi
 
 if [[ -n "$PIDS" ]]; then
     # lsof retorna los ids de los procesos, pueden ser varios
-    echo "Identificados procesos en puerto $PORT. Deteniendo (PIDs: $(echo $PIDS | tr '\n' ' '))..."
+    log_info "Identificados procesos en puerto $PORT. Deteniendo (PIDs: $(echo $PIDS | tr '\n' ' '))..."
     # Usamos kill -9 para forzar la detencion (sigkill)
     kill -9 $PIDS
-    echo "Procesos detenidos con éxito."
+    log_success "Procesos detenidos con éxito."
     exit 0
 else
-    echo "No se encontraron procesos usando el puerto $PORT."
+    log_info "No se encontraron procesos usando el puerto $PORT."
     exit 1
 fi

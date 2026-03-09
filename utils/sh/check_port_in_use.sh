@@ -2,6 +2,9 @@
 
 # Script para verificar si un puerto está en uso
 
+# Importar funciones de log
+source "$(dirname "$0")/../logs/logger.sh"
+
 PORT=""
 
 while [[ "$#" -gt 0 ]]; do
@@ -23,16 +26,15 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [[ -z "$PORT" ]]; then
-    echo "Error: Falta el parámetro --port."
-    exit 1
+    log_error "Falta el parámetro --port."
 fi
 
 # lsof -Pi :<puerto> -sTCP:LISTEN -t retorna solo el PID de manera silenciosa
 # Para ampliar compatibilidad buscamos cualquier uso de ese puerto si no hay LISTEN
 if lsof -Pi :"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1 || lsof -Pi :"$PORT" -t >/dev/null 2>&1; then
-    echo "El puerto $PORT está en uso."
+    log_warn "El puerto $PORT está en uso."
     exit 0
 else
-    echo "El puerto $PORT no está en uso."
+    log_info "El puerto $PORT no está en uso."
     exit 1
 fi

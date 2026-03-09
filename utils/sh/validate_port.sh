@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # Función para verificar que un puerto sea válido y no reservado
+source "$(dirname "$0")/../logs/logger.sh"
+
 validate_port() {
     local port="$1"
     
@@ -43,12 +45,12 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [[ -z "$PORT" ]]; then
-    echo "Error: Falta el parametro --port."
-    exit 1
+    log_error "Falta el parametro --port."
 fi
 
 if validate_port "$PORT"; then
+    log_success "El puerto $PORT es válido."
     exit 0
 else
-    exit 1
+    log_error "El puerto $PORT es inválido o se trata de un puerto reservado (1-1023)."
 fi

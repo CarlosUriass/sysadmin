@@ -7,8 +7,10 @@ param (
     [switch]$Help
 )
 
+. "$PSScriptRoot\..\logs\logger.ps1"
+
 if ($Help) {
-    Write-Host "Uso: .\check_port_in_use.ps1 -Port <numero_puerto>"
+    Write-LogInfo "Uso: .\check_port_in_use.ps1 -Port <numero_puerto>"
     exit 0
 }
 
@@ -16,16 +18,16 @@ if ($Help) {
 $connections = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
 
 if ($connections) {
-    Write-Host "El puerto $Port está en uso."
+    Write-LogWarn "El puerto $Port está en uso."
     exit 0
 } else {
     # También revisamos los bindings de puertos UDP por si acaso
     $udpConnections = Get-NetUDPEndpoint -LocalPort $Port -ErrorAction SilentlyContinue
     if ($udpConnections) {
-        Write-Host "El puerto UDP $Port está en uso."
+        Write-LogWarn "El puerto UDP $Port está en uso."
         exit 0
     }
 
-    Write-Host "El puerto $Port no está en uso."
+    Write-LogInfo "El puerto $Port no está en uso."
     exit 1
 }
