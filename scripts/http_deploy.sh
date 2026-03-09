@@ -251,6 +251,8 @@ EOF
 
     log_info "Validando configuración de Apache..."
     if ! apache2ctl configtest 2>/dev/null | grep -q "Syntax OK"; then
+        log_warn "Error detectado en la configuración:"
+        apache2ctl configtest
         log_error "La configuración de Apache tiene errores. Abortando reinicio."
     fi
 
