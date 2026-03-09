@@ -475,12 +475,50 @@ mostrar_estado_servicios() {
     echo ""
 }
 
+purgar_servicios() {
+    log_info "Iniciando proceso de purgado total de servicios HTTP..."
+    echo -e "\n\e[1;31mADVERTENCIA: Esto eliminará apache2, nginx y tomcat, junto con sus configuraciones.\e[0m"
+    if [[ "$INTERACTIVO" -eq 1 ]]; then
+        read -p "¿Estás seguro de que deseas continuar? [s/N]: " confirmacion
+        if [[ "$confirmacion" != "s" && "$confirmacion" != "S" ]]; then
+            log_info "Purgado cancelado por el usuario."
+            return 0
+        fi
+    fi
+
+    # Purgar Apache2
+    log_info "Eliminando Apache2..."
+    systemctl stop apache2 2>/dev/null
+    apt-get purge -y apache2 apache2-utils apache2-bin apache2.2-common 2>/dev/null
+    apt-get autoremove -y 2>/dev/null
+    rm -rf /etc/apache2 /var/www/html/* /var/log/apache2
+
+    # Purgar Nginx
+    log_info "Eliminando Nginx..."
+    systemctl stop nginx 2>/dev/null
+    apt-get purge -y nginx nginx-common nginx-full 2>/dev/null
+    apt-get autoremove -y 2>/dev/null
+    rm -rf /etc/nginx /usr/share/nginx/html/* /var/log/nginx
+
+    # Purgar Tomcat
+    log_info "Eliminando Tomcat..."
+    systemctl stop tomcat 2>/dev/null
+    systemctl disable tomcat 2>/dev/null
+    rm -f /etc/systemd/system/tomcat.service
+    systemctl daemon-reload
+    rm -rf /opt/tomcat
+    userdel -r tomcat 2>/dev/null || true
+
+    log_success "Purgado completado. Todos los servicios HTTP predeterminados han sido eliminados."
+}
+
 mostrar_ayuda() {
     echo "Uso: $0 [opciones]"
     echo ""
     echo "Opciones:"
     echo "  -h, --help               Muestra este mensaje de ayuda"
     echo "  --status                 Muestra el estado de los servicios HTTP"
+    echo "  --purge                  Elimina todas las configuraciones y servicios HTTP (apache, nginx, tomcat)"
     echo "  -s, --service <servicio> Servicio a instalar (apache2, nginx, tomcat)"
     echo "  -p, --port <puerto>      Puerto personalizado para la instalación"
     echo ""
@@ -497,6 +535,7 @@ mostrar_menu() {
     echo -e "  \e[1m2)\e[0m Instalar Nginx"
     echo -e "  \e[1m3)\e[0m Instalar Tomcat"
     echo -e "  \e[1m4)\e[0m Verificar servicios instalados"
+    echo -e "  \e[1m5)\e[0m Purgar todo (Eliminar servicios)"
     echo -e "  \e[1m0)\e[0m Salir"
     echo -e "\e[0;36m  Selecciona una opción:\e[0m "
 }
@@ -514,6 +553,11 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --status)
             mostrar_estado_servicios
+            exit 0
+            ;;
+        --purge)
+            INTERACTIVO=0
+            purgar_servicios
             exit 0
             ;;
         -s|--service)
@@ -564,8 +608,9 @@ while true; do
         2) PUERTO_ELEGIDO=""; instalar_nginx ;;
         3) PUERTO_ELEGIDO=""; instalar_tomcat ;;
         4) mostrar_estado_servicios ;;
+        5) purgar_servicios ;;
         0) log_success "Saliendo..."; exit 0 ;;
-        *) log_warn "Opción inválida. Ingresa 0, 1, 2, 3 o 4."; sleep 1 ;;
+        *) log_warn "Opción inválida. Ingresa 0, 1, 2, 3, 4 o 5."; sleep 1 ;;
     esac
 
     echo -e "\n\e[0;36mPresiona ENTER para volver al menú...\e[0m"
