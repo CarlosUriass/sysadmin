@@ -116,9 +116,24 @@ pedir_dominio() {
 # ==============================================================================
 _get_latest_tomcat() {
     local rama=$1
-    curl -s --max-time 5 "https://dlcdn.apache.org/tomcat/tomcat-${rama}/" \
-        | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' \
-        | sort -V | tail -1
+    local url="https://dlcdn.apache.org/tomcat/tomcat-${rama}/"
+    local version
+    
+    # Intentar obtener la lista de directorios
+    local content
+    content=$(curl -s --max-time 5 "$url")
+    if [[ $? -ne 0 || -z "$content" ]]; then
+        return 1
+    fi
+
+    # Extraer todas las versiones vX.Y.Z (ignorando betas/alphas -M) y tomar la mayor
+    version=$(echo "$content" | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+    
+    if [[ -n "$version" ]]; then
+        echo "$version"
+        return 0
+    fi
+    return 1
 }
 
 # ==============================================================================
@@ -217,12 +232,12 @@ obtener_versiones_tomcat() {
     v10=$(_get_latest_tomcat 10)
     v11=$(_get_latest_tomcat 11)
 
-    # Fallbacks actualizados (marzo 2026)
-    [[ -z "$v9"  ]] && v9="9.0.115"
-    [[ -z "$v10" ]] && v10="10.1.52"
-    [[ -z "$v11" ]] && v11="11.0.18"
+    # Fallbacks de emergencia si curl falla
+    if [[ -z "$v9" ]];  then log_warn "No se pudo detectar versión de Tomcat 9. Usando fallback."; v9="9.0.98"; fi
+    if [[ -z "$v10" ]]; then log_warn "No se pudo detectar versión de Tomcat 10. Usando fallback."; v10="10.1.34"; fi
+    if [[ -z "$v11" ]]; then log_warn "No se pudo detectar versión de Tomcat 11. Usando fallback."; v11="11.0.3"; fi
 
-    log_info "Versiones detectadas → Tomcat 9: $v9 | 10: $v10 | 11: $v11"
+    log_info "Versiones seleccionadas → Tomcat 9: $v9 | Tomcat 10: $v10 | Tomcat 11: $v11"
 
     declare -gA TOMCAT_VERSIONES=( ["1"]="$v9" ["2"]="$v10" ["3"]="$v11" )
     declare -gA TOMCAT_RAMAS=( ["1"]="9" ["2"]="10" ["3"]="11" )
@@ -393,10 +408,18 @@ instalar_tomcat() {
 
     log_info "Descargando Tomcat $TOMCAT_VERSION desde $TOMCAT_URL..."
     local TMP_FILE="/tmp/tomcat-${TOMCAT_VERSION}.tar.gz"
+    local WGET_LOG="/tmp/tomcat_wget.log"
 
-    wget --show-progress "$TOMCAT_URL" -O "$TMP_FILE"
-    if [[ $? -ne 0 || ! -s "$TMP_FILE" ]]; then
-        log_error "Falló la descarga de Tomcat desde $TOMCAT_URL. Verifica la versión o red."
+    # Capturar salida completa para debug si falla
+    if ! wget --show-progress "$TOMCAT_URL" -O "$TMP_FILE" > "$WGET_LOG" 2>&1; then
+        echo -e "\n\e[1;31m--- DETALLE DEL ERROR DE DESCARGA ---\e[0m"
+        cat "$WGET_LOG"
+        echo -e "\e[1;31m------------------------------------\e[0m"
+        log_error "Falló la descarga de Tomcat. Revisa el detalle arriba."
+    fi
+    
+    if [[ ! -s "$TMP_FILE" ]]; then
+        log_error "El archivo descargado está vacío. Posible error 404 no capturado correctamente."
     fi
 
     mkdir -p "$TOMCAT_DIR"
