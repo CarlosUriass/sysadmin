@@ -175,7 +175,7 @@ obtener_versiones_tomcat() {
     # Verificar Java e instalar con el util de paquetes
     if ! command -v java &>/dev/null; then
         log_warn "Java no encontrado. Instalando OpenJDK 17..."
-        "$UTILS_SH_DIR/install_package.sh" -p openjdk-17-jdk 2>/dev/null
+        apt-get install -y -qq openjdk-17-jdk 2>/dev/null
         if ! command -v java &>/dev/null; then
             log_error "No se pudo instalar Java. Tomcat requiere Java."
             return 1
@@ -225,7 +225,10 @@ instalar_apache() {
     if [[ -z "$PUERTO_ELEGIDO" ]]; then pedir_puerto; fi
 
     log_info "Instalando Apache2 versión $VERSION_ELEGIDA..."
-    "$UTILS_SH_DIR/install_package.sh" -p apache2 2>/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y apache2 2>/dev/null
+    if [[ $? -ne 0 ]]; then
+        log_error "Falló la instalación de Apache2."
+    fi
 
     log_info "Configurando puerto $PUERTO_ELEGIDO en Apache..."
     sed -i "s/Listen [0-9]*/Listen $PUERTO_ELEGIDO/g" /etc/apache2/ports.conf
@@ -273,7 +276,10 @@ instalar_nginx() {
     if [[ -z "$PUERTO_ELEGIDO" ]]; then pedir_puerto; fi
 
     log_info "Instalando Nginx versión $VERSION_ELEGIDA..."
-    "$UTILS_SH_DIR/install_package.sh" -p nginx 2>/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nginx 2>/dev/null
+    if [[ $? -ne 0 ]]; then
+        log_error "Falló la instalación de Nginx."
+    fi
 
     log_info "Configurando puerto $PUERTO_ELEGIDO en Nginx..."
     local nginx_default="/etc/nginx/sites-available/default"
