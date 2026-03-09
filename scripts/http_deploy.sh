@@ -44,7 +44,6 @@ verificar_conectividad() {
 validar_puerto_ext() {
     local puerto=$1
 
-    # Usar las utilidades de línea de comandos para validación
     "$UTILS_SH_DIR/validate_port.sh" --port "$puerto" >/dev/null 2>&1
     local validation_status=$?
 
@@ -53,13 +52,12 @@ validar_puerto_ext() {
         return 1
     fi
 
-    # Verificar si está en uso
     "$UTILS_SH_DIR/check_port_in_use.sh" --port "$puerto" >/dev/null 2>&1
     local in_use_status=$?
-    
-    # check_port_in_use retorna 0 si ESTA EN USO, 1 si no lo esta
+
     if [[ $in_use_status -eq 0 ]]; then
-        local proceso=$(ss -tlnp 2>/dev/null | grep ":${puerto} " | awk '{print $NF}' | head -1)
+        local proceso
+        proceso=$(ss -tlnp 2>/dev/null | grep ":${puerto} " | awk '{print $NF}' | head -1)
         log_error "El puerto $puerto ya está en uso por: $proceso"
         return 1
     fi
@@ -76,13 +74,11 @@ pedir_puerto() {
         echo -e "\e[0;36mIngresa el puerto de escucha (ej: 8080, 8888):\e[0m "
         read -r puerto_input
 
-        # Validar no vacío
         if [[ -z "$puerto_input" ]]; then
             log_warn "El puerto no puede estar vacío."
             continue
         fi
 
-        # Eliminar caracteres no numéricos por seguridad
         puerto_input=$(echo "$puerto_input" | tr -cd '0-9')
 
         if validar_puerto_ext "$puerto_input" 2>/dev/null; then
@@ -92,6 +88,8 @@ pedir_puerto() {
         fi
     done
 }
+
+# ==============================================================================
 # FUNCIÓN: PEDIR DOMINIO AL USUARIO
 # ==============================================================================
 pedir_dominio() {
@@ -100,7 +98,6 @@ pedir_dominio() {
         echo -e "\e[0;36mIngresa el nombre de dominio (ej: reprobados.com) o presiona ENTER para saltar:\e[0m "
         read -r dominio_input
 
-        # Si está vacío, continuamos sin dominio
         if [[ -z "$dominio_input" ]]; then
             log_info "Instalación sin nombre de dominio configurado."
             break
@@ -110,6 +107,18 @@ pedir_dominio() {
         log_success "Dominio $DOMINIO_ELEGIDO aceptado."
         break
     done
+}
+
+# ==============================================================================
+# FUNCIÓN AUXILIAR: OBTENER ÚLTIMA VERSIÓN DE TOMCAT POR RAMA
+# Debe estar en scope global (fuera de obtener_versiones_tomcat)
+# para que la sustitución de comandos $() pueda invocarla correctamente
+# ==============================================================================
+_get_latest_tomcat() {
+    local rama=$1
+    curl -s --max-time 5 "https://dlcdn.apache.org/tomcat/tomcat-${rama}/" \
+        | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' \
+        | sort -V | tail -1
 }
 
 # ==============================================================================
@@ -132,7 +141,6 @@ obtener_versiones_apache() {
         echo -e "  \e[1m$((i+1)))\e[0m ${VERSIONES_APACHE[$i]} $etiqueta"
     done
 
-    # Si estamos en modo no interactivo, tomamos la ultima por defecto.
     if [[ "$INTERACTIVO" -eq 0 ]]; then
         VERSION_ELEGIDA="${VERSIONES_APACHE[$((${#VERSIONES_APACHE[@]}-1))]}"
         return 0
@@ -169,7 +177,6 @@ obtener_versiones_nginx() {
         echo -e "  \e[1m$((i+1)))\e[0m ${VERSIONES_NGINX[$i]} $etiqueta"
     done
 
-    # Si estamos en modo no interactivo, tomamos la ultima por defecto.
     if [[ "$INTERACTIVO" -eq 0 ]]; then
         VERSION_ELEGIDA="${VERSIONES_NGINX[$((${#VERSIONES_NGINX[@]}-1))]}"
         return 0
@@ -204,13 +211,7 @@ obtener_versiones_tomcat() {
 
     log_info "Consultando versiones actuales desde dlcdn.apache.org..."
 
-    _get_latest_tomcat() {
-        local rama=$1
-        curl -s --max-time 5 "https://dlcdn.apache.org/tomcat/tomcat-${rama}/" \
-            | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' \
-            | sort -V | tail -1
-    }
-
+    # _get_latest_tomcat está definida en scope global — funciona correctamente en $()
     local v9 v10 v11
     v9=$(_get_latest_tomcat 9)
     v10=$(_get_latest_tomcat 10)
@@ -220,6 +221,8 @@ obtener_versiones_tomcat() {
     [[ -z "$v9"  ]] && v9="9.0.115"
     [[ -z "$v10" ]] && v10="10.1.52"
     [[ -z "$v11" ]] && v11="11.0.18"
+
+    log_info "Versiones detectadas → Tomcat 9: $v9 | 10: $v10 | 11: $v11"
 
     declare -gA TOMCAT_VERSIONES=( ["1"]="$v9" ["2"]="$v10" ["3"]="$v11" )
     declare -gA TOMCAT_RAMAS=( ["1"]="9" ["2"]="10" ["3"]="11" )
@@ -269,12 +272,13 @@ instalar_apache() {
 
     log_info "Configurando puerto $PUERTO_ELEGIDO en Apache..."
     sed -i "s/Listen [0-9]*/Listen $PUERTO_ELEGIDO/g" /etc/apache2/ports.conf
-    
-    # Si hay dominio configurar el ServerName en el VirtualHost
+
     if [[ -n "$DOMINIO_ELEGIDO" ]]; then
-        sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:$PUERTO_ELEGIDO>\n\tServerName $DOMINIO_ELEGIDO\n\tServerAlias www.$DOMINIO_ELEGIDO/g" /etc/apache2/sites-available/000-default.conf
+        sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:$PUERTO_ELEGIDO>\n\tServerName $DOMINIO_ELEGIDO\n\tServerAlias www.$DOMINIO_ELEGIDO/g" \
+            /etc/apache2/sites-available/000-default.conf
     else
-        sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:$PUERTO_ELEGIDO>/g" /etc/apache2/sites-available/000-default.conf
+        sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:$PUERTO_ELEGIDO>/g" \
+            /etc/apache2/sites-available/000-default.conf
     fi
 
     # Evitar warning AH00558
@@ -299,7 +303,6 @@ EOF
     configurar_firewall "$PUERTO_ELEGIDO"
 
     log_info "Validando configuración de Apache..."
-    # Redirigir stderr a stdout para que configtest pueda leerse
     if ! apache2ctl configtest 2>&1 | grep -q "Syntax OK"; then
         log_warn "Error detectado en la configuración:"
         apache2ctl configtest
@@ -333,8 +336,7 @@ instalar_nginx() {
     if [[ -f "$nginx_default" ]]; then
         sed -i "s/listen [0-9]* default_server/listen $PUERTO_ELEGIDO default_server/g" "$nginx_default"
         sed -i "s/listen \[::\]:[0-9]* default_server/listen [::]:$PUERTO_ELEGIDO default_server/g" "$nginx_default"
-        
-        # Si hay dominio configurar server_name
+
         if [[ -n "$DOMINIO_ELEGIDO" ]]; then
             sed -i "s/server_name _;/server_name $DOMINIO_ELEGIDO www.$DOMINIO_ELEGIDO;/g" "$nginx_default"
         fi
@@ -389,7 +391,7 @@ instalar_tomcat() {
         useradd -r -m -U -d "$TOMCAT_DIR" -s /bin/false "$TOMCAT_USER"
     fi
 
-    log_info "Descargando Tomcat $TOMCAT_VERSION..."
+    log_info "Descargando Tomcat $TOMCAT_VERSION desde $TOMCAT_URL..."
     local TMP_FILE="/tmp/tomcat-${TOMCAT_VERSION}.tar.gz"
 
     wget --show-progress "$TOMCAT_URL" -O "$TMP_FILE"
@@ -408,7 +410,9 @@ instalar_tomcat() {
     log_info "Configurando puerto $PUERTO_ELEGIDO en Tomcat server.xml..."
     sed -i "s/port=\"8080\"/port=\"$PUERTO_ELEGIDO\"/g" "$TOMCAT_DIR/conf/server.xml"
 
-    JAVA_HOME_PATH=$(dirname $(dirname $(readlink -f $(which java))))
+    local JAVA_HOME_PATH
+    JAVA_HOME_PATH=$(dirname "$(dirname "$(readlink -f "$(which java)")")")
+
     cat > /etc/systemd/system/tomcat.service <<EOF
 [Unit]
 Description=Apache Tomcat $TOMCAT_VERSION
@@ -444,12 +448,13 @@ EOF
 }
 
 # ==============================================================================
-# OTRAS FUNCIONES (FIREWALL, INDEX, VERIFICAR, MOSTRAR_ESTADO)
+# FIREWALL
 # ==============================================================================
 configurar_firewall() {
     local puerto=$1
     if command -v ufw &>/dev/null; then
-        local ufw_status=$(ufw status | head -1)
+        local ufw_status
+        ufw_status=$(ufw status | head -1)
         if echo "$ufw_status" | grep -q "active"; then
             log_info "Configurando UFW para puerto $puerto..."
             ufw allow "$puerto/tcp" comment "HTTP-Custom-$puerto" &>/dev/null
@@ -464,13 +469,17 @@ configurar_firewall() {
     fi
 }
 
+# ==============================================================================
+# INDEX HTML
+# ==============================================================================
 crear_index() {
     local ruta=$1
     local servicio=$2
     local version=$3
     local puerto=$4
     local dominio="${DOMINIO_ELEGIDO:-Sin Dominio Asignado}"
-    local fecha=$(date '+%Y-%m-%d %H:%M:%S')
+    local fecha
+    fecha=$(date '+%Y-%m-%d %H:%M:%S')
 
     log_info "Creando página index.html personalizada..."
     cat > "$ruta" <<EOF
@@ -493,6 +502,9 @@ EOF
     log_success "index.html creado en $ruta"
 }
 
+# ==============================================================================
+# VERIFICAR SERVICIO
+# ==============================================================================
 verificar_servicio() {
     local servicio=$1
     local puerto=$2
@@ -512,7 +524,8 @@ verificar_servicio() {
 
     log_info "Probando respuesta HTTP..."
     sleep 2
-    local http_response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://localhost:$puerto" 2>/dev/null)
+    local http_response
+    http_response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://localhost:$puerto" 2>/dev/null)
     if [[ "$http_response" == "200" ]]; then
         log_success "Servidor responde HTTP 200 en puerto $puerto ✓"
     else
@@ -520,13 +533,18 @@ verificar_servicio() {
     fi
 }
 
+# ==============================================================================
+# MOSTRAR ESTADO
+# ==============================================================================
 mostrar_estado_servicios() {
     echo -e "\n\e[1mEstado de servicios HTTP:\e[0m"
     echo -e "──────────────────────────────────────────"
     for svc in apache2 nginx tomcat; do
         if systemctl list-units --type=service 2>/dev/null | grep -q "$svc"; then
-            local estado=$(systemctl is-active "$svc" 2>/dev/null)
-            local puerto_activo=$(ss -tlnp 2>/dev/null | grep "$svc" | awk '{print $4}' | awk -F':' '{print $NF}' | head -1)
+            local estado
+            estado=$(systemctl is-active "$svc" 2>/dev/null)
+            local puerto_activo
+            puerto_activo=$(ss -tlnp 2>/dev/null | grep "$svc" | awk '{print $4}' | awk -F':' '{print $NF}' | head -1)
             echo -e "  \e[1m$svc\e[0m: $estado \e[0;36m(puerto: ${puerto_activo:-desconocido})\e[0m"
         else
             echo -e "  \e[1m$svc\e[0m: \e[1;33mno instalado\e[0m"
@@ -535,32 +553,32 @@ mostrar_estado_servicios() {
     echo ""
 }
 
+# ==============================================================================
+# PURGAR SERVICIOS
+# ==============================================================================
 purgar_servicios() {
     log_info "Iniciando proceso de purgado total de servicios HTTP..."
     echo -e "\n\e[1;31mADVERTENCIA: Esto eliminará apache2, nginx y tomcat, junto con sus configuraciones.\e[0m"
     if [[ "$INTERACTIVO" -eq 1 ]]; then
-        read -p "¿Estás seguro de que deseas continuar? [s/N]: " confirmacion
+        read -rp "¿Estás seguro de que deseas continuar? [s/N]: " confirmacion
         if [[ "$confirmacion" != "s" && "$confirmacion" != "S" ]]; then
             log_info "Purgado cancelado por el usuario."
             return 0
         fi
     fi
 
-    # Purgar Apache2
     log_info "Eliminando Apache2..."
     systemctl stop apache2 2>/dev/null
     apt-get purge -y apache2 apache2-utils apache2-bin apache2.2-common 2>/dev/null
     apt-get autoremove -y 2>/dev/null
     rm -rf /etc/apache2 /var/www/html/* /var/log/apache2
 
-    # Purgar Nginx
     log_info "Eliminando Nginx..."
     systemctl stop nginx 2>/dev/null
     apt-get purge -y nginx nginx-common nginx-full 2>/dev/null
     apt-get autoremove -y 2>/dev/null
     rm -rf /etc/nginx /usr/share/nginx/html/* /var/log/nginx
 
-    # Purgar Tomcat
     log_info "Eliminando Tomcat..."
     systemctl stop tomcat 2>/dev/null
     systemctl disable tomcat 2>/dev/null
@@ -569,16 +587,19 @@ purgar_servicios() {
     rm -rf /opt/tomcat
     userdel -r tomcat 2>/dev/null || true
 
-    log_success "Purgado completado. Todos los servicios HTTP predeterminados han sido eliminados."
+    log_success "Purgado completado. Todos los servicios HTTP han sido eliminados."
 }
 
+# ==============================================================================
+# AYUDA
+# ==============================================================================
 mostrar_ayuda() {
     echo "Uso: $0 [opciones]"
     echo ""
     echo "Opciones:"
     echo "  -h, --help               Muestra este mensaje de ayuda"
     echo "  --status                 Muestra el estado de los servicios HTTP"
-    echo "  --purge                  Elimina todas las configuraciones y servicios HTTP (apache, nginx, tomcat)"
+    echo "  --purge                  Elimina todas las configuraciones y servicios HTTP"
     echo "  -s, --service <servicio> Servicio a instalar (apache2, nginx, tomcat)"
     echo "  -p, --port <puerto>      Puerto personalizado para la instalación"
     echo "  -d, --domain <dominio>   Nombre de Dominio a configurar en DNS y WebServer"
@@ -594,16 +615,17 @@ configurar_dns_si_aplica() {
         log_info "Iniciando configuración DNS para el dominio $DOMINIO_ELEGIDO..."
         local iface_interna
         iface_interna=$(bash "$UTILS_SH_DIR/get_internal_iface.sh")
-        local my_ip=$(ip -4 addr show dev "$iface_interna" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
-        
+        local my_ip
+        my_ip=$(ip -4 addr show dev "$iface_interna" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+
         if [[ -z "$my_ip" ]]; then
-            log_error "No se pudo determinar IP local en la interfaz $iface_interna para inyectar al DNS."
+            log_error "No se pudo determinar IP local en la interfaz $iface_interna."
             return 1
         fi
-        
+
         log_info "Invocando setup_dns_linux.sh -d $DOMINIO_ELEGIDO -ip $my_ip"
         bash "$SCRIPT_DNS_DIR/setup_dns_linux.sh" -d "$DOMINIO_ELEGIDO" -ip "$my_ip"
-        
+
         if [[ $? -eq 0 ]]; then
             log_success "Integración DNS completada."
         else
@@ -613,7 +635,7 @@ configurar_dns_si_aplica() {
 }
 
 # ==============================================================================
-# MENÚ PRINCIPAL E INICIO
+# MENÚ PRINCIPAL
 # ==============================================================================
 mostrar_menu() {
     clear
@@ -627,11 +649,14 @@ mostrar_menu() {
     echo -e "\e[0;36m  Selecciona una opción:\e[0m "
 }
 
+# ==============================================================================
+# INICIO — VARIABLES GLOBALES Y PARSEO DE ARGUMENTOS
+# ==============================================================================
 PUERTO_ELEGIDO=""
 SERVICIO_ELEGIDO=""
+DOMINIO_ELEGIDO=""
 INTERACTIVO=1
 
-# Parámetros de comando
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         -h|--help)
@@ -669,7 +694,7 @@ done
 
 verificar_conectividad
 
-# Flujo No Interactivo
+# ── Flujo No Interactivo ──────────────────────────────────────────────────────
 if [[ "$INTERACTIVO" -eq 0 ]]; then
     if [[ -z "$PUERTO_ELEGIDO" ]]; then
         log_error "Debes especificar un puerto con -p o --port en modo no interactivo."
@@ -681,25 +706,25 @@ if [[ "$INTERACTIVO" -eq 0 ]]; then
 
     case "$SERVICIO_ELEGIDO" in
         apache2) instalar_apache ;;
-        nginx) instalar_nginx ;;
-        tomcat) instalar_tomcat ;;
-        *) log_error "El servicio $SERVICIO_ELEGIDO no es soportado. Usa apache2, nginx o tomcat." ;;
+        nginx)   instalar_nginx ;;
+        tomcat)  instalar_tomcat ;;
+        *) log_error "Servicio '$SERVICIO_ELEGIDO' no soportado. Usa: apache2, nginx, tomcat." ;;
     esac
-    
+
     configurar_dns_si_aplica
     exit 0
 fi
 
-# Flujo Interactivo
+# ── Flujo Interactivo ─────────────────────────────────────────────────────────
 while true; do
     mostrar_menu
     read -r opcion
     opcion=$(echo "$opcion" | tr -cd '0-9')
 
     case "$opcion" in
-        1) PUERTO_ELEGIDO=""; pedir_dominio; instalar_apache; configurar_dns_si_aplica ;;
-        2) PUERTO_ELEGIDO=""; pedir_dominio; instalar_nginx; configurar_dns_si_aplica ;;
-        3) PUERTO_ELEGIDO=""; pedir_dominio; instalar_tomcat; configurar_dns_si_aplica ;;
+        1) PUERTO_ELEGIDO=""; pedir_dominio; instalar_apache;  configurar_dns_si_aplica ;;
+        2) PUERTO_ELEGIDO=""; pedir_dominio; instalar_nginx;   configurar_dns_si_aplica ;;
+        3) PUERTO_ELEGIDO=""; pedir_dominio; instalar_tomcat;  configurar_dns_si_aplica ;;
         4) mostrar_estado_servicios ;;
         5) purgar_servicios ;;
         0) log_success "Saliendo..."; exit 0 ;;
