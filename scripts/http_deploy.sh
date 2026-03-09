@@ -3,13 +3,14 @@
 # Práctica 6 - Despliegue Dinámico de Servicios HTTP Multi-Versión
 # Sistema Operativo: Linux (Ubuntu/Debian)
 # Uso interactivo: sudo bash http_deploy.sh
-# Uso con parámetros: sudo bash http_deploy.sh -s apache2 -p 8080
+# Uso con parámetros: sudo bash http_deploy.sh -s apache2 -p 8080 -d midominio.com
 # ==============================================================================
 
 # Directorios de utilidades
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 UTILS_SH_DIR="$(readlink -f "$SCRIPT_DIR/../utils/sh")"
 UTILS_LOG_DIR="$(readlink -f "$SCRIPT_DIR/../utils/logs")"
+SCRIPT_DNS_DIR="$(readlink -f "$SCRIPT_DIR/dns")"
 
 # Importar logger
 if [[ -f "$UTILS_LOG_DIR/logger.sh" ]]; then
@@ -89,6 +90,24 @@ pedir_puerto() {
             log_success "Puerto $PUERTO_ELEGIDO aceptado."
             break
         fi
+    done
+# FUNCIÓN: PEDIR DOMINIO AL USUARIO
+# ==============================================================================
+pedir_dominio() {
+    local dominio_input
+    while true; do
+        echo -e "\e[0;36mIngresa el nombre de dominio (ej: reprobados.com) o presiona ENTER para saltar:\e[0m "
+        read -r dominio_input
+
+        # Si está vacío, continuamos sin dominio
+        if [[ -z "$dominio_input" ]]; then
+            log_info "Instalación sin nombre de dominio configurado."
+            break
+        fi
+
+        DOMINIO_ELEGIDO="$dominio_input"
+        log_success "Dominio $DOMINIO_ELEGIDO aceptado."
+        break
     done
 }
 
@@ -232,7 +251,13 @@ instalar_apache() {
 
     log_info "Configurando puerto $PUERTO_ELEGIDO en Apache..."
     sed -i "s/Listen [0-9]*/Listen $PUERTO_ELEGIDO/g" /etc/apache2/ports.conf
-    sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:$PUERTO_ELEGIDO>/g" /etc/apache2/sites-available/000-default.conf
+    
+    # Si hay dominio configurar el ServerName en el VirtualHost
+    if [[ -n "$DOMINIO_ELEGIDO" ]]; then
+        sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:$PUERTO_ELEGIDO>\n\tServerName $DOMINIO_ELEGIDO\n\tServerAlias www.$DOMINIO_ELEGIDO/g" /etc/apache2/sites-available/000-default.conf
+    else
+        sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:$PUERTO_ELEGIDO>/g" /etc/apache2/sites-available/000-default.conf
+    fi
 
     # Evitar warning AH00558
     if [[ ! -f /etc/apache2/conf-available/servername.conf ]]; then
@@ -290,6 +315,11 @@ instalar_nginx() {
     if [[ -f "$nginx_default" ]]; then
         sed -i "s/listen [0-9]* default_server/listen $PUERTO_ELEGIDO default_server/g" "$nginx_default"
         sed -i "s/listen \[::\]:[0-9]* default_server/listen [::]:$PUERTO_ELEGIDO default_server/g" "$nginx_default"
+        
+        # Si hay dominio configurar server_name
+        if [[ -n "$DOMINIO_ELEGIDO" ]]; then
+            sed -i "s/server_name _;/server_name $DOMINIO_ELEGIDO www.$DOMINIO_ELEGIDO;/g" "$nginx_default"
+        fi
     fi
     sed -i "s/listen[[:space:]]*[0-9]*;/listen $PUERTO_ELEGIDO;/g" /etc/nginx/nginx.conf 2>/dev/null
 
@@ -421,6 +451,7 @@ crear_index() {
     local servicio=$2
     local version=$3
     local puerto=$4
+    local dominio="${DOMINIO_ELEGIDO:-Sin Dominio Asignado}"
     local fecha=$(date '+%Y-%m-%d %H:%M:%S')
 
     log_info "Creando página index.html personalizada..."
@@ -433,9 +464,10 @@ crear_index() {
     <title>$servicio - Práctica 6</title>
 </head>
 <body>
-    <h1>🚀 Práctica 6 - $servicio</h1>
+    <h1>Práctica 6 - $servicio</h1>
     <p>Version: $version</p>
     <p>Puerto: $puerto</p>
+    <p>Dominio: $dominio</p>
     <p>Desplegado: $fecha</p>
 </body>
 </html>
@@ -531,8 +563,35 @@ mostrar_ayuda() {
     echo "  --purge                  Elimina todas las configuraciones y servicios HTTP (apache, nginx, tomcat)"
     echo "  -s, --service <servicio> Servicio a instalar (apache2, nginx, tomcat)"
     echo "  -p, --port <puerto>      Puerto personalizado para la instalación"
+    echo "  -d, --domain <dominio>   Nombre de Dominio a configurar en DNS y WebServer"
     echo ""
-    echo "Ejemplo: sudo $0 --service nginx --port 8080"
+    echo "Ejemplo: sudo $0 --service nginx --port 8080 -d mialumno.com"
+}
+
+# ==============================================================================
+# INTEGRACIÓN DNS
+# ==============================================================================
+configurar_dns_si_aplica() {
+    if [[ -n "$DOMINIO_ELEGIDO" ]]; then
+        log_info "Iniciando configuración DNS para el dominio $DOMINIO_ELEGIDO..."
+        local iface_interna
+        iface_interna=$(bash "$UTILS_SH_DIR/get_internal_iface.sh")
+        local my_ip=$(ip -4 addr show dev "$iface_interna" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+        
+        if [[ -z "$my_ip" ]]; then
+            log_error "No se pudo determinar IP local en la interfaz $iface_interna para inyectar al DNS."
+            return 1
+        fi
+        
+        log_info "Invocando setup_dns_linux.sh -d $DOMINIO_ELEGIDO -ip $my_ip"
+        bash "$SCRIPT_DNS_DIR/setup_dns_linux.sh" -d "$DOMINIO_ELEGIDO" -ip "$my_ip"
+        
+        if [[ $? -eq 0 ]]; then
+            log_success "Integración DNS completada."
+        else
+            log_error "Ocurrió un error en el script de DNS."
+        fi
+    fi
 }
 
 # ==============================================================================
@@ -575,6 +634,10 @@ while [[ "$#" -gt 0 ]]; do
             INTERACTIVO=0
             shift
             ;;
+        -d|--domain)
+            DOMINIO_ELEGIDO="$2"
+            shift
+            ;;
         -p|--port)
             PUERTO_ELEGIDO="$2"
             shift
@@ -604,6 +667,8 @@ if [[ "$INTERACTIVO" -eq 0 ]]; then
         tomcat) instalar_tomcat ;;
         *) log_error "El servicio $SERVICIO_ELEGIDO no es soportado. Usa apache2, nginx o tomcat." ;;
     esac
+    
+    configurar_dns_si_aplica
     exit 0
 fi
 
@@ -614,9 +679,9 @@ while true; do
     opcion=$(echo "$opcion" | tr -cd '0-9')
 
     case "$opcion" in
-        1) PUERTO_ELEGIDO=""; instalar_apache ;;
-        2) PUERTO_ELEGIDO=""; instalar_nginx ;;
-        3) PUERTO_ELEGIDO=""; instalar_tomcat ;;
+        1) PUERTO_ELEGIDO=""; pedir_dominio; instalar_apache; configurar_dns_si_aplica ;;
+        2) PUERTO_ELEGIDO=""; pedir_dominio; instalar_nginx; configurar_dns_si_aplica ;;
+        3) PUERTO_ELEGIDO=""; pedir_dominio; instalar_tomcat; configurar_dns_si_aplica ;;
         4) mostrar_estado_servicios ;;
         5) purgar_servicios ;;
         0) log_success "Saliendo..."; exit 0 ;;
