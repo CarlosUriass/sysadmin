@@ -156,6 +156,7 @@ function Generate-IndexHtml {
 }
 
 function Install-WebServer {
+    [OutputType([bool])]
     param([string]$Service, [int]$Port, [string]$Version)
     Write-LogInfo "Iniciando instalacion de $Service ($Version) en puerto $Port..."
     
@@ -178,8 +179,8 @@ function Install-WebServer {
             Apply-IISHardening
             Set-ServicePermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
             Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
-            Start-Service W3SVC -ErrorAction SilentlyContinue
-            return (Test-PortInUse -Port $Port)
+            Start-Service W3SVC -ErrorAction SilentlyContinue | Out-Null
+            return [bool](Test-PortInUse -Port $Port)
         }
         "nginx" {
             Write-LogInfo "Ejecutando choco install nginx..."
@@ -241,20 +242,20 @@ function Install-WebServer {
                 Start-Sleep -Seconds 2
             }
             
-            $res = Test-PortInUse -Port $Port
+            $res = [bool](Test-PortInUse -Port $Port)
             if ($res) {
                 Write-LogSuccess "Nginx verificado y escuchando en el puerto $Port."
             } else {
                 Write-LogError "Nginx no parece estar escuchando en el puerto $Port."
-                Write-Host "Diagnóstico: Ejecutando netstat para ver quién ocupa el puerto..." -ForegroundColor Gray
-                netstat -ano | findstr ":$Port" | Write-Host -ForegroundColor Cyan
+                Write-Host "Diagnóstico: Buscando procesos en el puerto $Port..." -ForegroundColor Gray
+                netstat -ano | findstr ":$Port" | Out-Host
                 
                 Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
                 if (Test-Path "$path\logs\error.log") {
                     Get-Content "$path\logs\error.log" -Tail 10 | Out-Host
                 } else {
-                    Write-LogWarn "No se encontró el archivo de log en $path\logs\error.log"
-                    dir "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto | Out-Host
+                    Write-LogWarn "No se encontró log en $path\logs\error.log. Listando carpeta..."
+                    Get-ChildItem "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto | Out-Host
                 }
             }
             return $res
@@ -318,23 +319,26 @@ function Install-WebServer {
                 Start-Sleep -Seconds 3
             }
             
-            $res = Test-PortInUse -Port $Port
+            $res = [bool](Test-PortInUse -Port $Port)
             if ($res) {
                 Write-LogSuccess "Apache verificado y escuchando en el puerto $Port."
             } else {
                 Write-LogError "Apache no parece estar escuchando en el puerto $Port."
-                Write-Host "Diagnóstico: Ejecutando netstat para ver quién ocupa el puerto..." -ForegroundColor Gray
-                netstat -ano | findstr ":$Port" | Write-Host -ForegroundColor Cyan
+                Write-Host "Diagnóstico: Buscando procesos en el puerto $Port..." -ForegroundColor Gray
+                netstat -ano | findstr ":$Port" | Out-Host
 
                 Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
-                if (Test-Path "$path\logs\error.log") {
-                    Get-Content "$path\logs\error.log" -Tail 10 | Out-Host
-                } elseif (Test-Path "$path\logs\error_log") {
-                    Get-Content "$path\logs\error_log" -Tail 10 | Out-Host
+                $logFile = Join-Path $path "logs\error.log"
+                if (-not (Test-Path $logFile)) { $logFile = Join-Path $path "logs\error_log" }
+                
+                if (Test-Path $logFile) {
+                    Get-Content $logFile -Tail 15 | Out-Host
                 } else {
-                    Write-LogWarn "No se encontró el archivo de log en $path\logs"
-                    dir "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto | Out-Host
+                    Write-LogWarn "No se encontró log en $($path)\logs. Listando archivos..."
+                    Get-ChildItem "$path" -Recurse -Filter "*log*" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto | Out-Host
                 }
+                
+                Write-LogInfo "Sugerencia: Intenta ejecutar manualmente para ver errores: & '$path\bin\httpd.exe' -f '$conf'"
             }
             return $res
         }
@@ -343,8 +347,8 @@ function Install-WebServer {
             return $false
         }
     }
-    Set-HttpFirewallRule -Port $Port -Svc $Service
-    return $true # Para IIS asumimos éxito o que el usuario vea el error de Start-Service
+    Set-HttpFirewallRule -Port $Port -Svc $Service | Out-Null
+    return $true 
 }
 
 # ==============================================================================
