@@ -238,19 +238,23 @@ function Install-WebServer {
                 Start-Sleep -Seconds 2
             }
             
-            if (Test-PortInUse -Port $Port) {
+            $res = Test-PortInUse -Port $Port
+            if ($res) {
                 Write-LogSuccess "Nginx verificado y escuchando en el puerto $Port."
             } else {
                 Write-LogError "Nginx no parece estar escuchando en el puerto $Port."
+                Write-Host "Diagnóstico: Ejecutando netstat para ver quién ocupa el puerto..." -ForegroundColor Gray
+                netstat -ano | findstr ":$Port" | Write-Host -ForegroundColor Cyan
+                
                 Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
                 if (Test-Path "$path\logs\error.log") {
                     Get-Content "$path\logs\error.log" -Tail 10
                 } else {
                     Write-LogWarn "No se encontró el archivo de log en $path\logs\error.log"
-                    dir "$path\logs" -ErrorAction SilentlyContinue | FT -Auto
+                    dir "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto
                 }
             }
-            return (Test-PortInUse -Port $Port)
+            return $res
         }
         "apache" {
             Write-LogInfo "Ejecutando choco install apache-httpd..."
@@ -298,19 +302,25 @@ function Install-WebServer {
             Restart-Service Apache* -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 3
             
-            if (Test-PortInUse -Port $Port) {
+            $res = Test-PortInUse -Port $Port
+            if ($res) {
                 Write-LogSuccess "Apache verificado y escuchando en el puerto $Port."
             } else {
                 Write-LogError "Apache no parece estar escuchando en el puerto $Port."
+                Write-Host "Diagnóstico: Ejecutando netstat para ver quién ocupa el puerto..." -ForegroundColor Gray
+                netstat -ano | findstr ":$Port" | Write-Host -ForegroundColor Cyan
+
                 Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
                 if (Test-Path "$path\logs\error.log") {
                     Get-Content "$path\logs\error.log" -Tail 10
+                } elseif (Test-Path "$path\logs\error_log") {
+                    Get-Content "$path\logs\error_log" -Tail 10
                 } else {
-                    Write-LogWarn "No se encontró el archivo de log en $path\logs\error.log"
-                    dir "$path\logs" -ErrorAction SilentlyContinue | FT -Auto
+                    Write-LogWarn "No se encontró el archivo de log en $path\logs"
+                    dir "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto
                 }
             }
-            return (Test-PortInUse -Port $Port)
+            return $res
         }
         default {
             Write-LogError "El servicio '$Service' no es válido o no está soportado. Use: iis, apache, nginx."
@@ -381,15 +391,19 @@ if ($Purge) {
     # 1. Detener servicios conocidos
     Stop-Service W3SVC, Apache*, nginx -Force -ErrorAction SilentlyContinue
     
-    # 2. Matar procesos huérfanos (por si corren fuera de servicios)
+    # 2. Matar procesos huérfanos (incluyendo posibles hijos)
     Write-LogInfo "Limpiando procesos residuales..."
-    Stop-Process -Name nginx, httpd, Apache* -Force -ErrorAction SilentlyContinue
+    Get-Process -Name nginx, httpd, Apache* -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     
-    # 3. Desinstalar y limpiar carpetas
+    # 3. Desinstalar y limpiar carpetas (incluyendo AppData si se detectó ahí)
     Write-LogInfo "Eliminando archivos y características..."
     Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -ErrorAction SilentlyContinue | Out-Null
     choco uninstall nginx apache-httpd -y --remove-dependencies -ErrorAction SilentlyContinue
-    Remove-Item "C:\tools\nginx*", "C:\tools\apache*", "C:\Apache24", "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue
+    
+    $cleanPaths = @("C:\tools\nginx*", "C:\tools\apache*", "C:\Apache24", "C:\tools\apache24", "$env:AppData\nginx*", "$env:AppData\Apache*")
+    foreach ($cp in $cleanPaths) {
+        Remove-Item $cp -Recurse -Force -ErrorAction SilentlyContinue
+    }
     
     Write-LogSuccess "Eliminación completada. El sistema está limpio."
     exit 0
