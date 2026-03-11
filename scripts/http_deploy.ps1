@@ -1,7 +1,12 @@
-# ==============================================================================
-# http_deploy.ps1 - Automated HTTP Provisioning System (Windows Server)
-# ==============================================================================
 # Requires -RunAsAdministrator
+
+param(
+    [string]$Service = "",
+    [int]$Port = 0,
+    [switch]$Status,
+    [switch]$Purge,
+    [switch]$Help
+)
 
 # ==============================================================================
 # UTILS & LOGGING
@@ -22,10 +27,6 @@ function Write-LogWarn ([string]$Message) {
 function Write-LogError ([string]$Message) {
     Write-Host "[FAIL] $(Get-Date -Format 'HH:mm:ss') - $Message" -ForegroundColor Red
 }
-
-# ==============================================================================
-# VALIDATION & PORT LOGIC
-# ==============================================================================
 
 function Validate-Input {
     param([string]$InputData)
@@ -53,7 +54,6 @@ function Test-PortInUse {
 function Get-DynamicVersions {
     param([string]$Service)
     
-    # Asegurar Chocolatey
     if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
         Write-LogWarn "Chocolatey no encontrado. Instalando..."
         Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -97,12 +97,10 @@ function Get-DynamicVersions {
 
 function Apply-IISHardening {
     Import-Module WebAdministration
-    # Eliminar Header X-Powered-By si existe
     $header = Get-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." | Where-Object { $_.Name -eq "X-Powered-By" }
     if ($header) {
         Remove-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" -Filter "system.webServer/httpProtocol/customHeaders" -Name "X-Powered-By" -ErrorAction SilentlyContinue
     }
-    # Seguridad de Headers
     Set-WebConfigurationProperty -pspath 'MACHINE/WEBROOT/APPHOST' -filter "system.webServer/httpProtocol/customHeaders" -name "." -value @{name='X-Frame-Options';value='SAMEORIGIN'} -ErrorAction SilentlyContinue
     Set-WebConfigurationProperty -pspath 'MACHINE/WEBROOT/APPHOST' -filter "system.webServer/httpProtocol/customHeaders" -name "." -value @{name='X-Content-Type-Options';value='nosniff'} -ErrorAction SilentlyContinue
 }
@@ -235,6 +233,34 @@ function Show-VersionMenu {
 # ==============================================================================
 # ENTRY POINT
 # ==============================================================================
+
+if ($Help) {
+    Write-Host "Uso: .\http_deploy.ps1 [-Service iis|apache|nginx] [-Port <numero>] [-Status] [-Purge]"
+    exit 0
+}
+
+if ($Status) {
+    Write-Host "`n--- Estado de Servicios ---" -ForegroundColor White
+    Get-Service -Name W3SVC, Apache*, nginx -ErrorAction SilentlyContinue | Select-Object Name, Status | Format-Table -AutoSize
+    exit 0
+}
+
+if ($Purge) {
+    Write-LogWarn "Iniciando eliminación completa de servicios..."
+    Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -ErrorAction SilentlyContinue | Out-Null
+    Stop-Service W3SVC, Apache*, nginx -Force -ErrorAction SilentlyContinue
+    choco uninstall nginx apache-httpd -y -ErrorAction SilentlyContinue
+    Remove-Item "C:\tools\nginx", "C:\tools\apache24", "C:\Apache24" -Recurse -Force -ErrorAction SilentlyContinue
+    Write-LogSuccess "Eliminación completada."
+    exit 0
+}
+
+if ($Service -ne "") {
+    if ($Port -eq 0) { Write-LogError "El parámetro -Port es obligatorio para el modo no interactivo."; exit 1 }
+    $Version = Get-DynamicVersions -Service $Service | Select-Object -First 1
+    Install-WebServer -Service $Service -Port $Port -Version $Version
+    exit 0
+}
 
 while ($true) {
     Clear-Host
