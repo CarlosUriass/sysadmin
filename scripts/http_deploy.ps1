@@ -299,9 +299,13 @@ function Install-WebServer {
             } else {
                 Write-LogError "Apache no parece estar escuchando en el puerto $Port. Revisa logs en $path\logs"
             }
+        default {
+            Write-LogError "El servicio '$Service' no es válido o no está soportado. Use: iis, apache, nginx."
+            return $false
         }
     }
     Set-HttpFirewallRule -Port $Port -Svc $Service
+    return $true
 }
 
 # ==============================================================================
@@ -361,20 +365,41 @@ if ($Status) {
 
 if ($Purge) {
     Write-LogWarn "Iniciando eliminación completa de servicios..."
-    Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -ErrorAction SilentlyContinue | Out-Null
+    # 1. Detener servicios conocidos
     Stop-Service W3SVC, Apache*, nginx -Force -ErrorAction SilentlyContinue
-    choco uninstall nginx apache-httpd -y -ErrorAction SilentlyContinue
-    Remove-Item "C:\tools\nginx", "C:\tools\apache24", "C:\Apache24" -Recurse -Force -ErrorAction SilentlyContinue
-    Write-LogSuccess "Eliminación completada."
+    
+    # 2. Matar procesos huérfanos (por si corren fuera de servicios)
+    Write-LogInfo "Limpiando procesos residuales..."
+    Stop-Process -Name nginx, httpd, Apache* -Force -ErrorAction SilentlyContinue
+    
+    # 3. Desinstalar y limpiar carpetas
+    Write-LogInfo "Eliminando archivos y características..."
+    Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -ErrorAction SilentlyContinue | Out-Null
+    choco uninstall nginx apache-httpd -y --remove-dependencies -ErrorAction SilentlyContinue
+    Remove-Item "C:\tools\nginx*", "C:\tools\apache*", "C:\Apache24", "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue
+    
+    Write-LogSuccess "Eliminación completada. El sistema está limpio."
     exit 0
 }
 
 if ($Service -ne "") {
+    $validServices = @("iis", "apache", "nginx")
+    if ($validServices -notcontains $Service.ToLower()) {
+        Write-LogError "Servicio '$Service' no válido. Use: $($validServices -join ', ')."
+        exit 1
+    }
     if ($Port -eq 0) { Write-LogError "El parámetro -Port es obligatorio para el modo no interactivo."; exit 1 }
+    
     $Version = Get-DynamicVersions -Service $Service | Select-Object -First 1
-    Install-WebServer -Service $Service -Port $Port -Version $Version
-    Write-LogSuccess "Proceso de despliegue silencioso finalizado."
-    exit 0
+    if ($null -eq $Version) { $Version = "LTS" }
+    
+    if (Install-WebServer -Service $Service -Port $Port -Version $Version) {
+        Write-LogSuccess "Proceso de despliegue silencioso finalizado correctamente."
+        exit 0
+    } else {
+        Write-LogError "El despliegue silencioso falló."
+        exit 1
+    }
 }
 
 while ($true) {
