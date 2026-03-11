@@ -237,7 +237,7 @@ function Install-WebServer {
                 Start-Process -FilePath "$path\nginx.exe" -WorkingDirectory $path -WindowStyle Hidden -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 2
             }
-
+            
             if (Test-PortInUse -Port $Port) {
                 Write-LogSuccess "Nginx verificado y escuchando en el puerto $Port."
             } else {
@@ -250,6 +250,7 @@ function Install-WebServer {
                     dir "$path\logs" -ErrorAction SilentlyContinue | FT -Auto
                 }
             }
+            return (Test-PortInUse -Port $Port)
         }
         "apache" {
             Write-LogInfo "Ejecutando choco install apache-httpd..."
@@ -279,7 +280,10 @@ function Install-WebServer {
 
             if ([string]::IsNullOrEmpty($path)) {
                 Write-LogError "No se pudo localizar la instalación de Apache en: $(($possiblePaths | Select-Object -Unique) -join ', '). Revisa el output de Chocolatey arriba."
-                return
+                return $false
+            }
+            if ($path -notmatch 'C:\\tools|C:\\Apache24') {
+                Write-LogWarn "Aviso: Se detectó Apache en una ruta inusual: $path"
             }
 
             $conf = "$path\conf\httpd.conf"
@@ -297,8 +301,16 @@ function Install-WebServer {
             if (Test-PortInUse -Port $Port) {
                 Write-LogSuccess "Apache verificado y escuchando en el puerto $Port."
             } else {
-                Write-LogError "Apache no parece estar escuchando en el puerto $Port. Revisa logs en $path\logs"
+                Write-LogError "Apache no parece estar escuchando en el puerto $Port."
+                Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
+                if (Test-Path "$path\logs\error.log") {
+                    Get-Content "$path\logs\error.log" -Tail 10
+                } else {
+                    Write-LogWarn "No se encontró el archivo de log en $path\logs\error.log"
+                    dir "$path\logs" -ErrorAction SilentlyContinue | FT -Auto
+                }
             }
+            return (Test-PortInUse -Port $Port)
         }
         default {
             Write-LogError "El servicio '$Service' no es válido o no está soportado. Use: iis, apache, nginx."
@@ -306,7 +318,7 @@ function Install-WebServer {
         }
     }
     Set-HttpFirewallRule -Port $Port -Svc $Service
-    return $true
+    return $true # Para IIS asumimos éxito o que el usuario vea el error de Start-Service
 }
 
 # ==============================================================================
