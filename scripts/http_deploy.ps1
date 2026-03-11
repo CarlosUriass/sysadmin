@@ -112,7 +112,15 @@ function Set-ServicePermissions {
         $Pass = ConvertTo-SecureString "P@ssw0rd2026!" -AsPlainText -Force
         New-LocalUser -Name $User -Password $Pass -Description "Dedicated Service User" | Out-Null
     }
-    $acl = Get-Acl $Path
+    if (-not (Test-Path $Path)) {
+        Write-LogWarn "No se pudo aplicar permisos: La ruta $Path no existe."
+        return
+    }
+    $acl = Get-Acl $Path -ErrorAction SilentlyContinue
+    if ($null -eq $acl) { 
+        Write-LogWarn "No se pudo obtener el ACL para $Path."
+        return 
+    }
     $acl.SetAccessRuleProtection($true, $true)
     $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($User, "ReadAndExecute", "ContainerInherit, ObjectInherit", "None", "Allow")
     $acl.SetAccessRule($rule)
@@ -175,15 +183,29 @@ function Install-WebServer {
         }
         "apache" {
             choco install apache-httpd --version=$Version -y --no-progress | Out-Null
-            $path = if (Test-Path "C:\tools\apache24") { "C:\tools\apache24" } else { "C:\Apache24" }
+            
+            # Intentar detectar la ruta de instalación
+            $possiblePaths = @("C:\tools\apache24", "C:\Apache24", "C:\Program Files\Apache24")
+            $path = ""
+            foreach ($p in $possiblePaths) {
+                if (Test-Path "$p\conf\httpd.conf") { $path = $p; break }
+            }
+
+            if ([string]::IsNullOrEmpty($path)) {
+                Write-LogError "No se pudo localizar la instalación de Apache. Revisa los logs de Chocolatey."
+                return
+            }
+
             $conf = "$path\conf\httpd.conf"
-            $c = Get-Content $conf
+            $c = Get-Content $conf -ErrorAction SilentlyContinue
+            if ($null -eq $c) { Write-LogError "No se pudo leer el archivo de configuración en $conf."; return }
+            
             $c = $c -replace 'Listen 80', "Listen $Port"
             $c = $c -replace 'ServerTokens \w+', "ServerTokens Prod"
             $c | Set-Content $conf
             Set-ServicePermissions -ServiceName "apache" -Path "$path\htdocs"
             Generate-IndexHtml -Path "$path\htdocs\index.html" -Svc "Apache" -Ver $Version -Port $Port
-            Restart-Service Apache*
+            Restart-Service Apache* -ErrorAction SilentlyContinue
         }
     }
     Set-HttpFirewallRule -Port $Port -Svc $Service
