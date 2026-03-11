@@ -217,9 +217,32 @@ function Install-WebServer {
             Generate-IndexHtml -Path "$path\html\index.html" -Svc "Nginx" -Ver $Version -Port $Port
 
             if (-not (Get-Service nginx -ErrorAction SilentlyContinue)) {
+                # Importante: nginx.exe no es un servicio nativo, suele requerir un wrapper.
+                # Intentamos crearlo, pero advertimos si falla al arrancar.
                 New-Service -Name "nginx" -BinaryPathName "$path\nginx.exe" -DisplayName "Nginx Server" -StartupType Automatic | Out-Null
             }
-            Restart-Service nginx -ErrorAction SilentlyContinue
+            
+            Write-LogInfo "Reiniciando servicio Nginx desde $path..."
+            Restart-Service nginx -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+
+            $status = Get-Service nginx -ErrorAction SilentlyContinue
+            if ($status.Status -ne "Running") {
+                Write-LogWarn "El servicio Nginx no está en ejecución (Status: $($status.Status))."
+                Write-LogInfo "Intentando arranque manual para diagnóstico..."
+                Start-Process -FilePath "$path\nginx.exe" -WorkingDirectory $path -WindowStyle Hidden
+                Start-Sleep -Seconds 2
+            }
+
+            if (Test-PortInUse -Port $Port) {
+                Write-LogSuccess "Nginx verificado y escuchando en el puerto $Port."
+            } else {
+                Write-LogError "Nginx no parece estar escuchando en el puerto $Port. Revisa $path\logs\error.log"
+                if (Test-Path "$path\logs\error.log") {
+                    Write-Host "Últimas líneas del log de error:" -ForegroundColor Gray
+                    Get-Content "$path\logs\error.log" -Tail 5
+                }
+            }
         }
         "apache" {
             Write-LogInfo "Ejecutando choco install apache-httpd..."
@@ -262,6 +285,13 @@ function Install-WebServer {
             Set-ServicePermissions -ServiceName "apache" -Path "$path\htdocs"
             Generate-IndexHtml -Path "$path\htdocs\index.html" -Svc "Apache" -Ver $Version -Port $Port
             Restart-Service Apache* -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            
+            if (Test-PortInUse -Port $Port) {
+                Write-LogSuccess "Apache verificado y escuchando en el puerto $Port."
+            } else {
+                Write-LogError "Apache no parece estar escuchando en el puerto $Port. Revisa logs en $path\logs"
+            }
         }
     }
     Set-HttpFirewallRule -Port $Port -Svc $Service
