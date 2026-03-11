@@ -251,10 +251,10 @@ function Install-WebServer {
                 
                 Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
                 if (Test-Path "$path\logs\error.log") {
-                    Get-Content "$path\logs\error.log" -Tail 10
+                    Get-Content "$path\logs\error.log" -Tail 10 | Out-Host
                 } else {
                     Write-LogWarn "No se encontró el archivo de log en $path\logs\error.log"
-                    dir "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto
+                    dir "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto | Out-Host
                 }
             }
             return $res
@@ -306,8 +306,17 @@ function Install-WebServer {
             $c | Set-Content $conf
             Set-ServicePermissions -ServiceName "apache" -Path "$path\htdocs"
             Generate-IndexHtml -Path "$path\htdocs\index.html" -Svc "Apache" -Ver $Version -Port $Port
-            Restart-Service Apache* -ErrorAction SilentlyContinue
+            Write-LogInfo "Reiniciando servicio Apache..."
+            Restart-Service Apache* -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 3
+            
+            $status = Get-Service -Name Apache* -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -eq $status -or $status.Status -ne "Running") {
+                Write-LogWarn "El servicio Apache no arrancó o no existe. Intentando arranque directo..."
+                Stop-Process -Name httpd -Force -ErrorAction SilentlyContinue
+                Start-Process -FilePath "$path\bin\httpd.exe" -WorkingDirectory "$path\bin" -WindowStyle Hidden -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 3
+            }
             
             $res = Test-PortInUse -Port $Port
             if ($res) {
@@ -319,12 +328,12 @@ function Install-WebServer {
 
                 Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
                 if (Test-Path "$path\logs\error.log") {
-                    Get-Content "$path\logs\error.log" -Tail 10
+                    Get-Content "$path\logs\error.log" -Tail 10 | Out-Host
                 } elseif (Test-Path "$path\logs\error_log") {
-                    Get-Content "$path\logs\error_log" -Tail 10
+                    Get-Content "$path\logs\error_log" -Tail 10 | Out-Host
                 } else {
                     Write-LogWarn "No se encontró el archivo de log en $path\logs"
-                    dir "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto
+                    dir "$path" -Recurse -Filter "*.log" -ErrorAction SilentlyContinue | Select -First 5 | FT -Auto | Out-Host
                 }
             }
             return $res
