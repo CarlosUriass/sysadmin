@@ -178,7 +178,8 @@ function Install-WebServer {
             Apply-IISHardening
             Set-ServicePermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
             Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
-            Start-Service W3SVC
+            Start-Service W3SVC -ErrorAction SilentlyContinue
+            return (Test-PortInUse -Port $Port)
         }
         "nginx" {
             Write-LogInfo "Ejecutando choco install nginx..."
@@ -209,9 +210,17 @@ function Install-WebServer {
             }
 
             $path = ""
-            foreach ($p in ($pathsToCheck | Select-Object -Unique)) {
-                if (Test-Path "$p\conf\nginx.conf") { $path = $p; break }
-                if (Test-Path "$p\nginx.conf") { $path = $p; break }
+            for ($i=0; $i -lt 2; $i++) {
+                $uniquePaths = $pathsToCheck | Where-Object { $_ } | Select-Object -Unique
+                foreach ($p in $uniquePaths) {
+                    if (Test-Path "$p\conf\nginx.conf") { $path = $p; break }
+                    if (Test-Path "$p\nginx.conf") { $path = $p; break }
+                }
+                
+                if ([string]::IsNullOrEmpty($path) -and $i -eq 0) {
+                    Write-LogWarn "Nginx no encontrado en rutas conocidas. Reintentando con --force..."
+                    choco install nginx --version=$Version -y --no-progress --force | Out-Host
+                } else { break }
             }
 
             if ([string]::IsNullOrEmpty($path)) {
@@ -287,9 +296,23 @@ function Install-WebServer {
                 }
             }
 
+            # 1. Intentar detectar vía comando en PATH
+            $cmd = Get-Command httpd.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd) {
+                $possiblePaths = @(Split-Path -Path (Split-Path -Path $cmd.Definition -Parent) -Parent) + $possiblePaths
+            }
+
             $path = ""
-            foreach ($p in ($possiblePaths | Select-Object -Unique)) {
-                if (Test-Path "$p\conf\httpd.conf") { $path = $p; break }
+            for ($i=0; $i -lt 2; $i++) {
+                $uniquePaths = $possiblePaths | Where-Object { $_ } | Select-Object -Unique
+                foreach ($p in $uniquePaths) {
+                    if (Test-Path "$p\conf\httpd.conf") { $path = $p; break }
+                }
+                
+                if ([string]::IsNullOrEmpty($path) -and $i -eq 0) {
+                    Write-LogWarn "Apache no encontrado en rutas conocidas. Reintentando con --force..."
+                    choco install apache-httpd --version=$Version -y --no-progress --force | Out-Host
+                } else { break }
             }
 
             if ([string]::IsNullOrEmpty($path)) {
