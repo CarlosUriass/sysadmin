@@ -182,17 +182,32 @@ function Install-WebServer {
             Restart-Service nginx
         }
         "apache" {
-            choco install apache-httpd --version=$Version -y --no-progress | Out-Null
+            Write-LogInfo "Ejecutando choco install apache-httpd..."
+            choco install apache-httpd --version=$Version -y --no-progress
             
             # Intentar detectar la ruta de instalación
-            $possiblePaths = @("C:\tools\apache24", "C:\Apache24", "C:\Program Files\Apache24")
+            $possiblePaths = New-Object System.Collections.Generic.List[string]
+            $possiblePaths.Add("C:\tools\apache24")
+            $possiblePaths.Add("C:\Apache24")
+            $possiblePaths.Add("$env:SystemDrive\tools\apache24")
+            if ($env:ChocolateyToolsLocation) { $possiblePaths.Add("$env:ChocolateyToolsLocation\apache24") }
+            
+            # Intentar detectar vía servicio si ya existe
+            $svc = Get-Service -Name Apache* -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($svc) {
+                $svcPath = (Get-WmiObject win32_service | Where-Object { $_.Name -eq $svc.Name }).PathName
+                if ($svcPath -match '"?([^"]+)\\bin\\httpd.exe"?') {
+                    $possiblePaths.Insert(0, $matches[1])
+                }
+            }
+
             $path = ""
             foreach ($p in $possiblePaths) {
                 if (Test-Path "$p\conf\httpd.conf") { $path = $p; break }
             }
 
             if ([string]::IsNullOrEmpty($path)) {
-                Write-LogError "No se pudo localizar la instalación de Apache. Revisa los logs de Chocolatey."
+                Write-LogError "No se pudo localizar la instalación de Apache en: $($possiblePaths -join ', '). Revisa el output de Chocolatey arriba."
                 return
             }
 
