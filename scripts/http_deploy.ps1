@@ -267,7 +267,7 @@ while ($true) {
     Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host "   SISTEMA HTTP CONSOLIDADO (WINDOWS)     " -ForegroundColor Cyan
     Write-Host "==========================================" -ForegroundColor Cyan
-    Write-Host "1) IIS`n2) Apache`n3) Nginx`n4) Estado`nq) Salir"
+    Write-Host "1) IIS`n2) Apache`n3) Nginx`n4) Estado`n5) Ayuda`nq) Salir"
     $c = Get-UserChoice -Prompt "Seleccione: "
 
     switch ($c) {
@@ -275,6 +275,11 @@ while ($true) {
         "2" { Install-WebServer -Service "apache" -Port (Request-ValidPort) -Version (Show-VersionMenu -Service "apache") }
         "3" { Install-WebServer -Service "nginx" -Port (Request-ValidPort) -Version (Show-VersionMenu -Service "nginx") }
         "4" { Get-Service W3SVC, Apache*, nginx -ErrorAction SilentlyContinue | Select Name, Status | FT -Auto }
+        "5" { 
+            Write-Host "`n--- Ayuda de Uso ---" -ForegroundColor White
+            Write-Host "Uso: .\http_deploy.ps1 [-Service iis|apache|nginx] [-Port <numero>] [-Status] [-Purge]"
+            Write-Host "Modo Interactivo: Ejecutar sin parámetros."
+        }
         "q" { exit 0 }
     }
     Read-Host "`nEnter para continuar..."
