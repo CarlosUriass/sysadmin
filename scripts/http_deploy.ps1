@@ -217,10 +217,11 @@ function Get-IISVersions {
     }
 
     $build = [System.Environment]::OSVersion.Version.Build
-    $osLabel = if     ($build -ge 20348) { "Windows Server 2022 - Latest" }
-               elseif ($build -ge 17763) { "Windows Server 2019 - LTS"    }
-               elseif ($build -ge 14393) { "Windows Server 2016 - LTS"    }
-               else                      { "Windows Server - Disponible"   }
+    $osLabel = ""
+    if     ($build -ge 20348) { $osLabel = "Windows Server 2022 - Latest" }
+    elseif ($build -ge 17763) { $osLabel = "Windows Server 2019 - LTS"    }
+    elseif ($build -ge 14393) { $osLabel = "Windows Server 2016 - LTS"    }
+    else                      { $osLabel = "Windows Server - Disponible"   }
 
     Write-Host ""
     Write-Host "  Versiones disponibles de IIS:" -ForegroundColor White
