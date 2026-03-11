@@ -170,6 +170,10 @@ function Install-WebServer {
         Start-Sleep -Seconds 2
     }
     
+    if ($Port -lt 1024 -and $Port -ne 80) {
+        Write-LogWarn "Aviso: El puerto $Port es un puerto privilegiado (<1024). Podria requerir permisos especiales o estar bloqueado por el sistema."
+    }
+    
     switch ($Service.ToLower()) {
         "iis" {
             $features = @("IIS-WebServerRole", "IIS-WebServer", "IIS-CommonHttpFeatures", "IIS-DefaultDocument", "IIS-StaticContent", "IIS-RequestFiltering")
@@ -217,8 +221,8 @@ function Install-WebServer {
             $c = Get-Content $conf -ErrorAction SilentlyContinue
             if ($null -eq $c) { Write-LogError "No se pudo leer el archivo de configuración en $conf."; return $false }
 
-            $c = $c -replace 'listen\s+80;', "listen $Port;"
-            $c = $c -replace 'server_tokens\s+\w+;', "server_tokens off;"
+            $c = $c -replace '(?mi)^\s*listen\s+.*?;', "    listen $Port;"
+            $c = $c -replace '(?mi)^\s*server_tokens\s+.*?;', "    server_tokens off;"
             $c | Set-Content $conf
             Set-ServicePermissions -ServiceName "nginx" -Path "$path\html"
             Generate-IndexHtml -Path "$path\html\index.html" -Svc "Nginx" -Ver $Version -Port $Port
@@ -246,9 +250,8 @@ function Install-WebServer {
             if ($res) {
                 Write-LogSuccess "Nginx verificado y escuchando en el puerto $Port."
             } else {
-                Write-LogError "Nginx no parece estar escuchando en el puerto $Port."
-                Write-Host "Diagnóstico: Buscando procesos en el puerto $Port..." -ForegroundColor Gray
-                netstat -ano | findstr ":$Port" | Out-Host
+                Write-Host "Diagnostic: Checking port $($Port)..." -ForegroundColor Gray
+                netstat -ano | Select-String ":$($Port)\s+" | Out-Host
                 
                 Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
                 if (Test-Path "$path\logs\error.log") {
@@ -302,8 +305,18 @@ function Install-WebServer {
             $c = Get-Content $conf -ErrorAction SilentlyContinue
             if ($null -eq $c) { Write-LogError "No se pudo leer el archivo de configuración en $conf."; return $false }
             
-            $c = $c -replace 'Listen 80', "Listen $Port"
-            $c = $c -replace 'ServerTokens \w+', "ServerTokens Prod"
+            $c = $c -replace '(?mi)^\s*Listen\s+.*', "Listen $Port"
+            $c = $c -replace '(?mi)^\s*#?ServerName\s+.*', "ServerName localhost:$Port"
+            
+            # Asegurar ServerRoot correcto
+            $pathFix = $path -replace '\\', '/'
+            if ($c -match '(?mi)^\s*#?ServerRoot') {
+                $c = $c -replace '(?mi)^\s*#?ServerRoot\s+.*', "ServerRoot `"$pathFix`""
+            } else {
+                $c = "ServerRoot `"$pathFix`"`r`n$c"
+            }
+
+            $c = $c -replace '(?mi)^\s*ServerTokens\s+\w+', "ServerTokens Prod"
             $c | Set-Content $conf
             Set-ServicePermissions -ServiceName "apache" -Path "$path\htdocs"
             Generate-IndexHtml -Path "$path\htdocs\index.html" -Svc "Apache" -Ver $Version -Port $Port
@@ -313,9 +326,9 @@ function Install-WebServer {
             
             $status = Get-Service -Name Apache* -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($null -eq $status -or $status.Status -ne "Running") {
-                Write-LogWarn "El servicio Apache no arrancó o no existe. Intentando arranque directo..."
+                Write-LogWarn "El servicio Apache no arrancó o no existe. Intentando arranque directo con -f..."
                 Stop-Process -Name httpd -Force -ErrorAction SilentlyContinue
-                Start-Process -FilePath "$path\bin\httpd.exe" -WorkingDirectory "$path\bin" -WindowStyle Hidden -ErrorAction SilentlyContinue
+                Start-Process -FilePath "$path\bin\httpd.exe" -ArgumentList "-f `"$conf`"" -WorkingDirectory "$path\bin" -WindowStyle Hidden -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 3
             }
             
@@ -323,9 +336,8 @@ function Install-WebServer {
             if ($res) {
                 Write-LogSuccess "Apache verificado y escuchando en el puerto $Port."
             } else {
-                Write-LogError "Apache no parece estar escuchando en el puerto $Port."
-                Write-Host "Diagnóstico: Buscando procesos en el puerto $Port..." -ForegroundColor Gray
-                netstat -ano | findstr ":$Port" | Out-Host
+                Write-Host "Diagnostic: Checking port $($Port)..." -ForegroundColor Gray
+                netstat -ano | Select-String ":$($Port)\s+" | Out-Host
 
                 Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
                 $logFile = Join-Path $path "logs\error.log"
