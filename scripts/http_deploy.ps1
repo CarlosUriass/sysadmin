@@ -152,7 +152,7 @@ function Install-WebServer {
             $features = @("IIS-WebServerRole", "IIS-WebServer", "IIS-CommonHttpFeatures", "IIS-DefaultDocument", "IIS-StaticContent", "IIS-RequestFiltering")
             foreach ($f in $features) { Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart | Out-Null }
             Import-Module WebAdministration
-            Set-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -PropertyName BindingInformation -Value "*:$Port:" -ErrorAction SilentlyContinue
+            Set-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -PropertyName BindingInformation -Value "*:$($Port):" -ErrorAction SilentlyContinue
             Apply-IISHardening
             Set-ServicePermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
             Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
