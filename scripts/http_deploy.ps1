@@ -168,18 +168,49 @@ function Install-WebServer {
             Start-Service W3SVC
         }
         "nginx" {
-            choco install nginx --version=$Version -y --no-progress | Out-Null
-            $conf = "C:\tools\nginx\conf\nginx.conf"
-            $c = Get-Content $conf
+            Write-LogInfo "Ejecutando choco install nginx..."
+            choco install nginx --version=$Version -y --no-progress
+            
+            # Intentar detectar la ruta de instalación
+            $possiblePaths = New-Object System.Collections.Generic.List[string]
+            $possiblePaths.Add("C:\tools\nginx")
+            $possiblePaths.Add("$env:SystemDrive\tools\nginx")
+            if ($env:ChocolateyToolsLocation) { $possiblePaths.Add("$env:ChocolateyToolsLocation\nginx") }
+            
+            # Intentar detectar vía servicio si ya existe
+            $svc = Get-Service -Name nginx* -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($svc) {
+                $svcPath = (Get-WmiObject win32_service | Where-Object { $_.Name -eq $svc.Name }).PathName
+                # El path de nginx suele ser "C:\path\to\nginx.exe"
+                if ($svcPath -match '"?([^"]+)\\nginx.exe"?') {
+                    $possiblePaths.Insert(0, $matches[1])
+                }
+            }
+
+            $path = ""
+            foreach ($p in $possiblePaths) {
+                if (Test-Path "$p\conf\nginx.conf") { $path = $p; break }
+            }
+
+            if ([string]::IsNullOrEmpty($path)) {
+                Write-LogError "No se pudo localizar la instalación de Nginx en: $($possiblePaths -join ', '). Revisa el output de Chocolatey arriba."
+                return
+            }
+
+            $conf = "$path\conf\nginx.conf"
+            $c = Get-Content $conf -ErrorAction SilentlyContinue
+            if ($null -eq $c) { Write-LogError "No se pudo leer el archivo de configuración en $conf."; return }
+
             $c = $c -replace 'listen\s+80;', "listen $Port;"
             $c = $c -replace 'server_tokens\s+\w+;', "server_tokens off;"
             $c | Set-Content $conf
-            Set-ServicePermissions -ServiceName "nginx" -Path "C:\tools\nginx\html"
-            Generate-IndexHtml -Path "C:\tools\nginx\html\index.html" -Svc "Nginx" -Ver $Version -Port $Port
+            Set-ServicePermissions -ServiceName "nginx" -Path "$path\html"
+            Generate-IndexHtml -Path "$path\html\index.html" -Svc "Nginx" -Ver $Version -Port $Port
+
             if (-not (Get-Service nginx -ErrorAction SilentlyContinue)) {
-                New-Service -Name "nginx" -BinaryPathName "C:\tools\nginx\nginx.exe" -DisplayName "Nginx Server" -StartupType Automatic | Out-Null
+                New-Service -Name "nginx" -BinaryPathName "$path\nginx.exe" -DisplayName "Nginx Server" -StartupType Automatic | Out-Null
             }
-            Restart-Service nginx
+            Restart-Service nginx -ErrorAction SilentlyContinue
         }
         "apache" {
             Write-LogInfo "Ejecutando choco install apache-httpd..."
