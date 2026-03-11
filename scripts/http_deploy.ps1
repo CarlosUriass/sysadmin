@@ -185,32 +185,16 @@ function Install-WebServer {
             Write-LogInfo "Ejecutando choco install nginx..."
             choco install nginx --version=$Version -y --no-progress | Out-Host
             
-            # Intentar detectar la ruta de instalación
-            $pathsToCheck = @("C:\tools\nginx", "$env:SystemDrive\tools\nginx")
-            
-            # Soporte para carpetas versionadas (ej: C:\tools\nginx-1.29.6)
-            $pathsToCheck += @(Get-Item "C:\tools\nginx*" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
-            
-            if ($env:ChocolateyToolsLocation) { $pathsToCheck += "$env:ChocolateyToolsLocation\nginx" }
-            if ($env:ChocolateyInstall) { $pathsToCheck += "$env:ChocolateyInstall\lib\nginx\tools\nginx" }
-            
-            # 1. Intentar detectar vía comando en PATH
-            $cmd = Get-Command nginx.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($cmd) {
-                $pathsToCheck = @(Split-Path -Path $cmd.Definition -Parent) + $pathsToCheck
-            }
-
-            # 2. Intentar detectar vía servicio si ya existe
-            $svc = Get-Service -Name nginx* -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($svc) {
-                $svcPath = (Get-WmiObject win32_service | Where-Object { $_.Name -eq $svc.Name }).PathName
-                if ($svcPath -match '"?([^"]+)\\nginx.exe"?') {
-                    $pathsToCheck = @($matches[1]) + $pathsToCheck
-                }
-            }
-
             $path = ""
             for ($i=0; $i -lt 2; $i++) {
+                $pathsToCheck = @("C:\tools\nginx", "$env:SystemDrive\tools\nginx", "$env:AppData\nginx", "$env:LOCALAPPDATA\nginx")
+                $pathsToCheck += @(Get-Item "C:\tools\nginx*" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                if ($env:ChocolateyToolsLocation) { $pathsToCheck += "$env:ChocolateyToolsLocation\nginx" }
+                if ($env:ChocolateyInstall) { $pathsToCheck += "$env:ChocolateyInstall\lib\nginx\tools\nginx" }
+                
+                $cmd = Get-Command nginx.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($cmd) { $pathsToCheck += Split-Path -Path $cmd.Definition -Parent }
+
                 $uniquePaths = $pathsToCheck | Where-Object { $_ } | Select-Object -Unique
                 foreach ($p in $uniquePaths) {
                     if (Test-Path "$p\conf\nginx.conf") { $path = $p; break }
@@ -279,31 +263,21 @@ function Install-WebServer {
             Write-LogInfo "Ejecutando choco install apache-httpd..."
             choco install apache-httpd --version=$Version -y --no-progress | Out-Host
             
-            # Intentar detectar la ruta de instalación
-            $possiblePaths = @("C:\tools\apache24", "C:\Apache24", "$env:SystemDrive\tools\apache24")
-            
-            # Soporte para carpetas versionadas
-            $possiblePaths += @(Get-Item "C:\tools\apache*" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
-            
-            if ($env:ChocolateyToolsLocation) { $possiblePaths += "$env:ChocolateyToolsLocation\apache24" }
-            
-            # Intentar detectar vía servicio si ya existe
-            $svc = Get-Service -Name Apache* -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($svc) {
-                $svcPath = (Get-WmiObject win32_service | Where-Object { $_.Name -eq $svc.Name }).PathName
-                if ($svcPath -match '"?([^"]+)\\bin\\httpd.exe"?') {
-                    $possiblePaths = @($matches[1]) + $possiblePaths
-                }
-            }
-
-            # 1. Intentar detectar vía comando en PATH
-            $cmd = Get-Command httpd.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($cmd) {
-                $possiblePaths = @(Split-Path -Path (Split-Path -Path $cmd.Definition -Parent) -Parent) + $possiblePaths
-            }
-
             $path = ""
             for ($i=0; $i -lt 2; $i++) {
+                $possiblePaths = @("C:\tools\apache24", "C:\Apache24", "$env:SystemDrive\tools\apache24", "$env:AppData\Apache24", "$env:LOCALAPPDATA\Apache24")
+                $possiblePaths += @(Get-Item "C:\tools\apache*" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+                if ($env:ChocolateyToolsLocation) { $possiblePaths += "$env:ChocolateyToolsLocation\apache24" }
+                
+                $svc = Get-Service -Name Apache* -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($svc) {
+                    $svcPath = (Get-WmiObject win32_service | Where-Object { $_.Name -eq $svc.Name }).PathName
+                    if ($svcPath -match '"?([^"]+)\\bin\\httpd.exe"?') { $possiblePaths += $matches[1] }
+                }
+
+                $cmd = Get-Command httpd.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($cmd) { $possiblePaths += Split-Path -Path (Split-Path -Path $cmd.Definition -Parent) -Parent }
+
                 $uniquePaths = $possiblePaths | Where-Object { $_ } | Select-Object -Unique
                 foreach ($p in $uniquePaths) {
                     if (Test-Path "$p\conf\httpd.conf") { $path = $p; break }
