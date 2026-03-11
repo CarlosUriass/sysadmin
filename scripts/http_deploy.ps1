@@ -299,6 +299,7 @@ function Install-WebServer {
             } else {
                 Write-LogError "Apache no parece estar escuchando en el puerto $Port. Revisa logs en $path\logs"
             }
+        }
         default {
             Write-LogError "El servicio '$Service' no es válido o no está soportado. Use: iis, apache, nginx."
             return $false
