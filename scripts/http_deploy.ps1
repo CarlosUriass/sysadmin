@@ -143,12 +143,15 @@ function Generate-IndexHtml {
     param([string]$Path, [string]$Svc, [string]$Ver, [int]$Port)
     $Time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     @"
-<!DOCTYPE html>
 <html>
-<head><title>Servidor $Svc</title><style>body { font-family: sans-serif; text-align: center; background: #f4f4f4; padding: 50px; }</style></head>
-<body><div style="background: white; padding: 20px; border-radius: 10px; display: inline-block;">
-    <h1>Servidor: $Svc</h1><p><strong>Version:</strong> $Ver</p><p><strong>Puerto:</strong> $Port</p><hr><p><small>Aprovisionado: $Time</small></p>
-</div></body></html>
+<head><title>Aprovisionamiento HTTP - Windows</title></head>
+<body>
+    <h1>Servidor: $Svc</h1>
+    <p>Version: $Ver</p>
+    <p>Puerto: $Port</p>
+    <p>Fecha: $Time</p>
+</body>
+</html>
 "@ | Set-Content -Path $Path -Encoding UTF8
 }
 
