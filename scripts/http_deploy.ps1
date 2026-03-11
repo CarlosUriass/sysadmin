@@ -175,6 +175,9 @@ function Install-WebServer {
             $pathsToCheck = New-Object System.Collections.Generic.List[string]
             $pathsToCheck.Add("C:\tools\nginx")
             $pathsToCheck.Add("$env:SystemDrive\tools\nginx")
+            # Soporte para carpetas versionadas (ej: C:\tools\nginx-1.29.6)
+            $pathsToCheck.AddRange((Get-Item "C:\tools\nginx*" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName))
+            
             if ($env:ChocolateyToolsLocation) { $pathsToCheck.Add("$env:ChocolateyToolsLocation\nginx") }
             if ($env:ChocolateyInstall) { $pathsToCheck.Add("$env:ChocolateyInstall\lib\nginx\tools\nginx") }
             
@@ -196,12 +199,11 @@ function Install-WebServer {
             $path = ""
             foreach ($p in ($pathsToCheck | Select-Object -Unique)) {
                 if (Test-Path "$p\conf\nginx.conf") { $path = $p; break }
-                # A veces nginx.conf esta directamente en la carpeta o en un subnivel distinto
                 if (Test-Path "$p\nginx.conf") { $path = $p; break }
             }
 
             if ([string]::IsNullOrEmpty($path)) {
-                Write-LogError "No se pudo localizar la instalación de Nginx en: $($pathsToCheck -join ', '). Revisa el output de Chocolatey arriba."
+                Write-LogError "No se pudo localizar la instalación de Nginx en: $(($pathsToCheck | Select-Object -Unique) -join ', '). Revisa el output de Chocolatey arriba."
                 return
             }
 
@@ -229,6 +231,9 @@ function Install-WebServer {
             $possiblePaths.Add("C:\tools\apache24")
             $possiblePaths.Add("C:\Apache24")
             $possiblePaths.Add("$env:SystemDrive\tools\apache24")
+            # Soporte para carpetas versionadas
+            $possiblePaths.AddRange((Get-Item "C:\tools\apache*" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName))
+            
             if ($env:ChocolateyToolsLocation) { $possiblePaths.Add("$env:ChocolateyToolsLocation\apache24") }
             
             # Intentar detectar vía servicio si ya existe
@@ -241,12 +246,12 @@ function Install-WebServer {
             }
 
             $path = ""
-            foreach ($p in $possiblePaths) {
+            foreach ($p in ($possiblePaths | Select-Object -Unique)) {
                 if (Test-Path "$p\conf\httpd.conf") { $path = $p; break }
             }
 
             if ([string]::IsNullOrEmpty($path)) {
-                Write-LogError "No se pudo localizar la instalación de Apache en: $($possiblePaths -join ', '). Revisa el output de Chocolatey arriba."
+                Write-LogError "No se pudo localizar la instalación de Apache en: $(($possiblePaths | Select-Object -Unique) -join ', '). Revisa el output de Chocolatey arriba."
                 return
             }
 
