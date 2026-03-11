@@ -219,7 +219,7 @@ function Install-WebServer {
             if (-not (Get-Service nginx -ErrorAction SilentlyContinue)) {
                 # Importante: nginx.exe no es un servicio nativo, suele requerir un wrapper.
                 # Intentamos crearlo, pero advertimos si falla al arrancar.
-                New-Service -Name "nginx" -BinaryPathName "$path\nginx.exe" -DisplayName "Nginx Server" -StartupType Automatic | Out-Null
+                New-Service -Name "nginx" -BinaryPathName "$path\nginx.exe" -DisplayName "Nginx Server" -StartupType Automatic -ErrorAction SilentlyContinue | Out-Null
             }
             
             Write-LogInfo "Reiniciando servicio Nginx desde $path..."
@@ -227,20 +227,24 @@ function Install-WebServer {
             Start-Sleep -Seconds 3
 
             $status = Get-Service nginx -ErrorAction SilentlyContinue
-            if ($status.Status -ne "Running") {
-                Write-LogWarn "El servicio Nginx no está en ejecución (Status: $($status.Status))."
-                Write-LogInfo "Intentando arranque manual para diagnóstico..."
-                Start-Process -FilePath "$path\nginx.exe" -WorkingDirectory $path -WindowStyle Hidden
+            if ($null -eq $status -or $status.Status -ne "Running") {
+                Write-LogWarn "El servicio Nginx no está en ejecución o no existe. Intentando arranque directo..."
+                # Matar procesos huérfanos antes de reintentar
+                Stop-Process -Name nginx -Force -ErrorAction SilentlyContinue 
+                Start-Process -FilePath "$path\nginx.exe" -WorkingDirectory $path -WindowStyle Hidden -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 2
             }
 
             if (Test-PortInUse -Port $Port) {
                 Write-LogSuccess "Nginx verificado y escuchando en el puerto $Port."
             } else {
-                Write-LogError "Nginx no parece estar escuchando en el puerto $Port. Revisa $path\logs\error.log"
+                Write-LogError "Nginx no parece estar escuchando en el puerto $Port."
+                Write-Host "Comprobando logs en $path\logs..." -ForegroundColor Gray
                 if (Test-Path "$path\logs\error.log") {
-                    Write-Host "Últimas líneas del log de error:" -ForegroundColor Gray
-                    Get-Content "$path\logs\error.log" -Tail 5
+                    Get-Content "$path\logs\error.log" -Tail 10
+                } else {
+                    Write-LogWarn "No se encontró el archivo de log en $path\logs\error.log"
+                    dir "$path\logs" -ErrorAction SilentlyContinue | FT -Auto
                 }
             }
         }
@@ -295,7 +299,6 @@ function Install-WebServer {
         }
     }
     Set-HttpFirewallRule -Port $Port -Svc $Service
-    Write-LogSuccess "$Service desplegado en puerto $Port."
 }
 
 # ==============================================================================
@@ -367,6 +370,7 @@ if ($Service -ne "") {
     if ($Port -eq 0) { Write-LogError "El parámetro -Port es obligatorio para el modo no interactivo."; exit 1 }
     $Version = Get-DynamicVersions -Service $Service | Select-Object -First 1
     Install-WebServer -Service $Service -Port $Port -Version $Version
+    Write-LogSuccess "Proceso de despliegue silencioso finalizado."
     exit 0
 }
 
