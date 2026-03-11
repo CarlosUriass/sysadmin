@@ -216,12 +216,12 @@ function Install-WebServer {
 
             if ([string]::IsNullOrEmpty($path)) {
                 Write-LogError "No se pudo localizar la instalación de Nginx en: $(($pathsToCheck | Select-Object -Unique) -join ', '). Revisa el output de Chocolatey arriba."
-                return
+                return $false
             }
 
             $conf = "$path\conf\nginx.conf"
             $c = Get-Content $conf -ErrorAction SilentlyContinue
-            if ($null -eq $c) { Write-LogError "No se pudo leer el archivo de configuración en $conf."; return }
+            if ($null -eq $c) { Write-LogError "No se pudo leer el archivo de configuración en $conf."; return $false }
 
             $c = $c -replace 'listen\s+80;', "listen $Port;"
             $c = $c -replace 'server_tokens\s+\w+;', "server_tokens off;"
@@ -302,7 +302,7 @@ function Install-WebServer {
 
             $conf = "$path\conf\httpd.conf"
             $c = Get-Content $conf -ErrorAction SilentlyContinue
-            if ($null -eq $c) { Write-LogError "No se pudo leer el archivo de configuración en $conf."; return }
+            if ($null -eq $c) { Write-LogError "No se pudo leer el archivo de configuración en $conf."; return $false }
             
             $c = $c -replace 'Listen 80', "Listen $Port"
             $c = $c -replace 'ServerTokens \w+', "ServerTokens Prod"
@@ -398,22 +398,30 @@ if ($Status) {
 
 if ($Purge) {
     Write-LogWarn "Iniciando eliminación completa de servicios..."
-    # 1. Detener servicios conocidos
-    Stop-Service W3SVC, Apache*, nginx -Force -ErrorAction SilentlyContinue
+    # 1. Detener y desregistrar servicios conocidos
+    $servicesToKill = Get-Service -Name W3SVC, Apache*, nginx* -ErrorAction SilentlyContinue
+    foreach ($s in $servicesToKill) {
+        Write-LogInfo "Eliminando servicio $($s.Name)..."
+        Stop-Service $s.Name -Force -ErrorAction SilentlyContinue | Out-Null
+        sc.exe delete $s.Name | Out-Null
+    }
     
     # 2. Matar procesos huérfanos (incluyendo posibles hijos)
     Write-LogInfo "Limpiando procesos residuales..."
     Get-Process -Name nginx, httpd, Apache* -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     
-    # 3. Desinstalar y limpiar carpetas (incluyendo AppData si se detectó ahí)
+    # 3. Desinstalar y limpiar carpetas
     Write-LogInfo "Eliminando archivos y características..."
     Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -ErrorAction SilentlyContinue | Out-Null
-    choco uninstall nginx apache-httpd -y --remove-dependencies -ErrorAction SilentlyContinue
+    choco uninstall nginx apache-httpd -y --remove-dependencies -ErrorAction SilentlyContinue | Out-Host
     
-    $cleanPaths = @("C:\tools\nginx*", "C:\tools\apache*", "C:\Apache24", "C:\tools\apache24", "$env:AppData\nginx*", "$env:AppData\Apache*", "$env:LOCALAPPDATA\nginx*", "$env:LOCALAPPDATA\Apache*", "C:\Users\*\AppData\Roaming\Apache24", "C:\Users\*\AppData\Roaming\nginx")
+    $cleanPaths = @("C:\tools\nginx*", "C:\tools\apache*", "C:\Apache24", "C:\tools\apache24", "$env:AppData\nginx*", "$env:AppData\Apache*", "$env:LOCALAPPDATA\nginx*", "$env:LOCALAPPDATA\Apache*")
+    # Limpiar AppData de todos los usuarios si es posible (solo el actual es seguro)
     foreach ($cp in $cleanPaths) {
         Remove-Item $cp -Recurse -Force -ErrorAction SilentlyContinue
     }
+    # Intento extra para la ruta específica reportada por el usuario
+    Remove-Item "C:\Users\Administrator\AppData\Roaming\Apache24" -Recurse -Force -ErrorAction SilentlyContinue
     
     Write-LogSuccess "Eliminación completada. El sistema está limpio."
     exit 0
