@@ -172,28 +172,36 @@ function Install-WebServer {
             choco install nginx --version=$Version -y --no-progress
             
             # Intentar detectar la ruta de instalación
-            $possiblePaths = New-Object System.Collections.Generic.List[string]
-            $possiblePaths.Add("C:\tools\nginx")
-            $possiblePaths.Add("$env:SystemDrive\tools\nginx")
-            if ($env:ChocolateyToolsLocation) { $possiblePaths.Add("$env:ChocolateyToolsLocation\nginx") }
+            $pathsToCheck = New-Object System.Collections.Generic.List[string]
+            $pathsToCheck.Add("C:\tools\nginx")
+            $pathsToCheck.Add("$env:SystemDrive\tools\nginx")
+            if ($env:ChocolateyToolsLocation) { $pathsToCheck.Add("$env:ChocolateyToolsLocation\nginx") }
+            if ($env:ChocolateyInstall) { $pathsToCheck.Add("$env:ChocolateyInstall\lib\nginx\tools\nginx") }
             
-            # Intentar detectar vía servicio si ya existe
+            # 1. Intentar detectar vía comando en PATH
+            $cmd = Get-Command nginx.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd) {
+                $pathsToCheck.Insert(0, (Split-Path -Path $cmd.Definition -Parent))
+            }
+
+            # 2. Intentar detectar vía servicio si ya existe
             $svc = Get-Service -Name nginx* -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($svc) {
                 $svcPath = (Get-WmiObject win32_service | Where-Object { $_.Name -eq $svc.Name }).PathName
-                # El path de nginx suele ser "C:\path\to\nginx.exe"
                 if ($svcPath -match '"?([^"]+)\\nginx.exe"?') {
-                    $possiblePaths.Insert(0, $matches[1])
+                    $pathsToCheck.Insert(0, $matches[1])
                 }
             }
 
             $path = ""
-            foreach ($p in $possiblePaths) {
+            foreach ($p in ($pathsToCheck | Select-Object -Unique)) {
                 if (Test-Path "$p\conf\nginx.conf") { $path = $p; break }
+                # A veces nginx.conf esta directamente en la carpeta o en un subnivel distinto
+                if (Test-Path "$p\nginx.conf") { $path = $p; break }
             }
 
             if ([string]::IsNullOrEmpty($path)) {
-                Write-LogError "No se pudo localizar la instalación de Nginx en: $($possiblePaths -join ', '). Revisa el output de Chocolatey arriba."
+                Write-LogError "No se pudo localizar la instalación de Nginx en: $($pathsToCheck -join ', '). Revisa el output de Chocolatey arriba."
                 return
             }
 
