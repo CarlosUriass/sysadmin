@@ -159,6 +159,18 @@ function Install-WebServer {
     param([string]$Service, [int]$Port, [string]$Version)
     Write-LogInfo "Iniciando instalacion de $Service ($Version) en puerto $Port..."
     
+    # Limpiar puerto si esta ocupado
+    if (Test-PortInUse -Port $Port) {
+        Write-LogWarn "El puerto $Port esta ocupado. Liberando..."
+        $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
+        if ($conn) {
+            foreach ($c in $conn) {
+                Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
+    
     switch ($Service.ToLower()) {
         "iis" {
             $features = @("IIS-WebServerRole", "IIS-WebServer", "IIS-CommonHttpFeatures", "IIS-DefaultDocument", "IIS-StaticContent", "IIS-RequestFiltering")
