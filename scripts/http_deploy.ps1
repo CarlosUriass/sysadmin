@@ -159,16 +159,14 @@ function Install-WebServer {
     param([string]$Service, [int]$Port, [string]$Version)
     Write-LogInfo "Iniciando instalacion de $Service ($Version) en puerto $Port..."
     
-    # Limpiar puerto si esta ocupado
-    if (Test-PortInUse -Port $Port) {
-        Write-LogWarn "El puerto $Port esta ocupado. Liberando..."
-        $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
-        if ($conn) {
-            foreach ($c in $conn) {
-                Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
-            }
-            Start-Sleep -Seconds 1
+    # Limpiar puerto si esta ocupado (matar procesos bloqueantes)
+    $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
+    if ($conn) {
+        Write-LogWarn "El puerto $Port esta ocupado por PID: $($conn.OwningProcess -join ', '). Liberando..."
+        foreach ($c in $conn) {
+            Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
         }
+        Start-Sleep -Seconds 2
     }
     
     switch ($Service.ToLower()) {
@@ -176,7 +174,7 @@ function Install-WebServer {
             $features = @("IIS-WebServerRole", "IIS-WebServer", "IIS-CommonHttpFeatures", "IIS-DefaultDocument", "IIS-StaticContent", "IIS-RequestFiltering")
             foreach ($f in $features) { Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart | Out-Null }
             Import-Module WebAdministration
-            Set-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -PropertyName BindingInformation -Value "*:$($Port):" -ErrorAction SilentlyContinue
+            Set-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -PropertyName BindingInformation -Value "*:$($Port):" -ErrorAction SilentlyContinue | Out-Null
             Apply-IISHardening
             Set-ServicePermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
             Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
@@ -184,7 +182,7 @@ function Install-WebServer {
         }
         "nginx" {
             Write-LogInfo "Ejecutando choco install nginx..."
-            choco install nginx --version=$Version -y --no-progress
+            choco install nginx --version=$Version -y --no-progress | Out-Host
             
             # Intentar detectar la ruta de instalación
             $pathsToCheck = @("C:\tools\nginx", "$env:SystemDrive\tools\nginx")
@@ -270,7 +268,7 @@ function Install-WebServer {
         }
         "apache" {
             Write-LogInfo "Ejecutando choco install apache-httpd..."
-            choco install apache-httpd --version=$Version -y --no-progress
+            choco install apache-httpd --version=$Version -y --no-progress | Out-Host
             
             # Intentar detectar la ruta de instalación
             $possiblePaths = @("C:\tools\apache24", "C:\Apache24", "$env:SystemDrive\tools\apache24")
@@ -412,7 +410,7 @@ if ($Purge) {
     Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -ErrorAction SilentlyContinue | Out-Null
     choco uninstall nginx apache-httpd -y --remove-dependencies -ErrorAction SilentlyContinue
     
-    $cleanPaths = @("C:\tools\nginx*", "C:\tools\apache*", "C:\Apache24", "C:\tools\apache24", "$env:AppData\nginx*", "$env:AppData\Apache*")
+    $cleanPaths = @("C:\tools\nginx*", "C:\tools\apache*", "C:\Apache24", "C:\tools\apache24", "$env:AppData\nginx*", "$env:AppData\Apache*", "$env:LOCALAPPDATA\nginx*", "$env:LOCALAPPDATA\Apache*", "C:\Users\*\AppData\Roaming\Apache24", "C:\Users\*\AppData\Roaming\nginx")
     foreach ($cp in $cleanPaths) {
         Remove-Item $cp -Recurse -Force -ErrorAction SilentlyContinue
     }
