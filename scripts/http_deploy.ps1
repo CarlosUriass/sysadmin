@@ -202,6 +202,7 @@ function Get-UserChoice {
 function Request-ValidPort {
     while ($true) {
         $pStr = Get-UserChoice -Prompt "Ingrese puerto de escucha: "
+        $p = 0
         if ([int]::TryParse($pStr, [ref]$p)) {
             if (-not (Test-PortInRange -Port $p)) { Write-LogWarn "Rango invalido."; continue }
             if ($p -lt 1024 -and $p -ne 80) { Write-LogWarn "Puerto reservado."; continue }
@@ -223,6 +224,7 @@ function Show-VersionMenu {
     Write-Host "`n--- Versiones para $Svc ---"
     for ($i=0; $i -lt $v.Count; $i++) { Write-Host "  $($i+1)) $($v[$i])" }
     $s = Get-UserChoice -Prompt "Seleccione [1-$($v.Count)]: "
+    $idx = 0
     if ([int]::TryParse($s, [ref]$idx) -and $idx -ge 1 -and $idx -le $v.Count) { return $v[$idx-1] }
     return $v[0]
 }
