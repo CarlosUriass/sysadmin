@@ -208,21 +208,47 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     if (-not (Test-Path $conf)) { Write-LogError "httpd.conf no encontrado en $conf"; return $false }
     Write-LogInfo "Configurando $conf ..."
     $c = Get-Content $conf -Raw
+
+    # FIX 1: Corregir SRVROOT a la ruta real de extraccion
+    # El ZIP de choco tiene rutas hardcodeadas a /Apache24 del entorno de build
+    $c = $c -replace 'Define SRVROOT "[^"]*"', 'Define SRVROOT "C:/tools/Apache24"'
+
+    # FIX 2: Reemplazar cualquier ruta residual hardcodeada
+    $c = $c -replace '(?<![/\w])/?Apache24/', 'C:/tools/Apache24/'
+
+    # Puerto y hardening
     $c = $c -replace '(?m)^Listen\s+80\b',           "Listen $Port"
     $c = $c -replace '(?m)^#?ServerTokens\s+\w+',    "ServerTokens Prod"
     $c = $c -replace '(?m)^#?ServerSignature\s+\w+', "ServerSignature Off"
     $c = $c -replace '#LoadModule headers_module',    'LoadModule headers_module'
+
+    # Headers de seguridad
     if ($c -notmatch "X-Frame-Options") {
         $c += "`r`nHeader always set X-Frame-Options SAMEORIGIN"
         $c += "`r`nHeader always set X-Content-Type-Options nosniff"
     }
+
+    # FIX 3: Usar Require (Apache 2.4) en lugar de Deny from all (2.2)
     if ($c -notmatch "LimitExcept") {
         $fwd = $apachePath -replace '\\','/'
-        $c += "`r`n<Directory `"$fwd/htdocs`">`r`n    <LimitExcept GET POST>`r`n        Deny from all`r`n    </LimitExcept>`r`n</Directory>"
+        $c += "`r`n<Directory `"$fwd/htdocs`">`r`n    <LimitExcept GET POST>`r`n        Require all denied`r`n    </LimitExcept>`r`n</Directory>"
     }
+
     [System.IO.File]::WriteAllText($conf, $c, [System.Text.UTF8Encoding]::new($false))
+
+    # Validar configuracion antes de intentar iniciar
+    Write-LogInfo "Validando configuracion de Apache..."
+    $testOut = & "$apachePath\bin\httpd.exe" -t 2>&1
+    if ($testOut -match "Syntax OK") {
+        Write-LogInfo "Configuracion valida."
+    } else {
+        Write-LogError "Error en httpd.conf:`n$testOut"
+        return $false
+    }
+
     Set-ServiceUserAndPermissions -ServiceName "apache" -Path "$apachePath\htdocs"
     Generate-IndexHtml -Path "$apachePath\htdocs\index.html" -Svc "Apache" -Ver $Version -Port $Port
+
     $httpd = "$apachePath\bin\httpd.exe"
     if (-not (Get-Service "Apache*" -ErrorAction SilentlyContinue)) {
         Write-LogInfo "Registrando servicio Apache..."
@@ -232,7 +258,15 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     & $httpd -k restart 2>&1 | Out-Null
     Start-Sleep 2
     if (Test-PortInUse -Port $Port) { Write-LogSuccess "Apache escuchando en puerto $Port" }
-    else { Write-LogWarn "Apache no responde en $Port - revisa $apachePath\logs\error.log" }
+    else {
+        $errLog = "$apachePath\logs\error.log"
+        if (Test-Path $errLog) {
+            Write-LogError "Apache no responde. Ultimas lineas de error.log:"
+            Get-Content $errLog -Tail 10 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        } else {
+            Write-LogWarn "Apache no responde en $Port y no hay error.log - posible fallo al registrar servicio."
+        }
+    }
     return $true
 }
 
@@ -272,7 +306,15 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
     Pop-Location
     Start-Sleep 2
     if (Test-PortInUse -Port $Port) { Write-LogSuccess "Nginx escuchando en puerto $Port" }
-    else { Write-LogWarn "Nginx no responde en $Port - revisa $nginxPath\logs\error.log" }
+    else {
+        $errLog = "$nginxPath\logs\error.log"
+        if (Test-Path $errLog) {
+            Write-LogError "Nginx no responde. Ultimas lineas de error.log:"
+            Get-Content $errLog -Tail 10 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        } else {
+            Write-LogWarn "Nginx no responde en $Port y no hay error.log."
+        }
+    }
     return $true
 }
 
