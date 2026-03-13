@@ -118,7 +118,7 @@ function Generate-IndexHtml {
     param([string]$Path, [string]$Svc, [string]$Ver, [int]$Port)
     $Time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     # El script deberá crear una página index.html personalizada: "Servidor: [Nombre del Servicio] - Versión: [Versión Elegida] - Puerto: [Puerto]"
-    $Content = "<h1>Servidor: $Svc - Versión: $Ver - Puerto: $Port</h1><p>Aprovisionamiento Automatizado - Windows (Práctica 6)</p><p>Fecha: $Time</p>"
+    $Content = "<h1>Servidor: $Svc - Version: $Ver - Puerto: $Port</h1><p>Aprovisionamiento Automatizado - Windows (Practica 6)</p><p>Fecha: $Time</p>"
     $Content | Set-Content -Path $Path -Encoding UTF8
     Write-LogSuccess "Página index.html generada en $Path"
 }

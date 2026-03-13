@@ -76,7 +76,7 @@ generate_index() {
     local srv=$2
     local ver=$3
     local port=$4
-    echo "<h1>Servidor: $srv - Versión: $ver - Puerto: $port</h1><p>Aprovisionamiento Automatizado - Linux (Práctica 6)</p><p>Fecha: $(date)</p>" > "$path"
+    echo "<h1>Servidor: $srv - Version: $ver - Puerto: $port</h1><p>Aprovisionamiento Automatizado - Linux (Practica 6)</p><p>Fecha: $(date)</p>" > "$path"
 }
 
 install_apache() {
@@ -84,8 +84,17 @@ install_apache() {
     local ver=$2
     check_port "$p"
     log_info "Instalando Apache..."
-    [[ -n "$ver" ]] && pkg="apache2=$ver" || pkg="apache2"
-    apt-get update -qq && apt-get install -y -qq apache2
+    
+    # Prevenir inicio automatico durante instalacion
+    echo "exit 101" > /usr/sbin/policy-rc.d
+    chmod +x /usr/sbin/policy-rc.d
+    
+    apt-get update -qq && apt-get install -y -qq apache2 || {
+        log_warn "Error en instalacion inicial, intentando corregir..."
+        apt-get install -f -y -qq
+    }
+    
+    rm -f /usr/sbin/policy-rc.d
     
     # Hardening
     sed -i "s/Listen 80/Listen $p/" /etc/apache2/ports.conf
@@ -114,8 +123,18 @@ install_nginx() {
     local ver=$2
     check_port "$p"
     log_info "Instalando Nginx..."
-    apt-get update -qq && apt-get install -y -qq nginx
     
+    # Prevenir inicio automatico durante instalacion
+    echo "exit 101" > /usr/sbin/policy-rc.d
+    chmod +x /usr/sbin/policy-rc.d
+
+    apt-get update -qq && apt-get install -y -qq nginx || {
+        log_warn "Error en instalacion inicial, intentando corregir..."
+        apt-get install -f -y -qq
+    }
+    
+    rm -f /usr/sbin/policy-rc.d
+
     local conf="/etc/nginx/sites-available/default"
     sed -i "s/listen 80 default_server;/listen $p default_server;/" "$conf"
     sed -i "s/listen \[::\]:80 default_server;/listen [::]:$p default_server;/" "$conf"
