@@ -272,6 +272,29 @@ function Apply-IISHardening ([int]$Port) {
     # web.config idempotente — siempre sobreescribir
     $webDir = "C:\inetpub\wwwroot"
     if (-not (Test-Path $webDir)) { New-Item -ItemType Directory -Path $webDir -Force | Out-Null }
+    $webConfigContent = @'
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <httpProtocol>
+      <customHeaders>
+        <clear />
+        <remove name="X-Powered-By" />
+        <add name="X-Frame-Options" value="SAMEORIGIN" />
+        <add name="X-Content-Type-Options" value="nosniff" />
+      </customHeaders>
+    </httpProtocol>
+    <security>
+      <requestFiltering removeServerHeader="true">
+        <verbs allowUnlisted="true">
+          <clear />
+          <add verb="TRACE" allowed="false" />
+          <add verb="TRACK" allowed="false" />
+        </verbs>
+      </requestFiltering>
+    </security>
+  </system.webServer>
+</configuration>
 '@
     [System.IO.File]::WriteAllText("$webDir\web.config", $webConfigContent, [System.Text.UTF8Encoding]::new($false))
     Write-LogInfo "web.config escrito."
