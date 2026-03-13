@@ -23,10 +23,10 @@ $ErrorActionPreference = "Continue"
 # LOGGING
 # ==============================================================================
 
-function Write-LogInfo    ([string]$m) { Write-Host "[INFO] $(Get-Date -F 'HH:mm:ss') - $m" -ForegroundColor Cyan    }
-function Write-LogSuccess ([string]$m) { Write-Host "[OK]   $(Get-Date -F 'HH:mm:ss') - $m" -ForegroundColor Green   }
-function Write-LogWarn    ([string]$m) { Write-Host "[WARN] $(Get-Date -F 'HH:mm:ss') - $m" -ForegroundColor Yellow  }
-function Write-LogError   ([string]$m) { Write-Host "[FAIL] $(Get-Date -F 'HH:mm:ss') - $m" -ForegroundColor Red     }
+function Write-LogInfo    ([string]$m) { Write-Host "[INFO] $(Get-Date -F 'HH:mm:ss') - $m" -ForegroundColor Cyan   }
+function Write-LogSuccess ([string]$m) { Write-Host "[OK]   $(Get-Date -F 'HH:mm:ss') - $m" -ForegroundColor Green  }
+function Write-LogWarn    ([string]$m) { Write-Host "[WARN] $(Get-Date -F 'HH:mm:ss') - $m" -ForegroundColor Yellow }
+function Write-LogError   ([string]$m) { Write-Host "[FAIL] $(Get-Date -F 'HH:mm:ss') - $m" -ForegroundColor Red   }
 
 # ==============================================================================
 # UTILS
@@ -55,12 +55,8 @@ function Ensure-Chocolatey {
     }
 }
 
-# Detecta la ruta real donde choco instalo un paquete buscando su ejecutable
 function Get-ChocoInstallPath ([string]$ExeName, [string[]]$Candidates) {
-    foreach ($c in $Candidates) {
-        if (Test-Path $c) { return $c }
-    }
-    # Fallback: buscar en PATH
+    foreach ($c in $Candidates) { if (Test-Path $c) { return $c } }
     $found = Get-Command $ExeName -ErrorAction SilentlyContinue
     if ($found) { return Split-Path $found.Source -Parent }
     return $null
@@ -99,14 +95,37 @@ function Set-ServiceUserAndPermissions {
     if (Test-Path $Path) {
         $acl = Get-Acl $Path
         $acl.SetAccessRuleProtection($true, $true)
-        $rules = $acl.Access | Where-Object { $_.IdentityReference -match "BUILTIN\\Users" }
+
+        # Quitar solo permisos heredados de Users genericos, NO tocar IUSR ni IIS_IUSRS
+        $rules = $acl.Access | Where-Object {
+            $_.IdentityReference -match "BUILTIN\\Users$" -and
+            $_.IsInherited -eq $false
+        }
         foreach ($r in $rules) { $acl.RemoveAccessRule($r) | Out-Null }
+
+        # Usuario de servicio dedicado: ReadAndExecute
         $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
             $user, "ReadAndExecute",
             "ContainerInherit,ObjectInherit", "None", "Allow"
         )
         $acl.SetAccessRule($rule)
+
+        # IIS: IUSR necesita Read para acceso anonimo
+        $iusr = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "IUSR", "ReadAndExecute",
+            "ContainerInherit,ObjectInherit", "None", "Allow"
+        )
+        $acl.SetAccessRule($iusr)
+
+        # IIS_IUSRS necesita Read para que el worker process acceda
+        $iisUsers = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "IIS_IUSRS", "ReadAndExecute",
+            "ContainerInherit,ObjectInherit", "None", "Allow"
+        )
+        $acl.SetAccessRule($iisUsers)
+
         Set-Acl $Path $acl
+        Write-LogInfo "Permisos ACL aplicados en $Path (svc_$ServiceName + IUSR + IIS_IUSRS)"
     }
 }
 
@@ -116,82 +135,95 @@ function Apply-IISHardening ([int]$Port) {
 
     $pspath = "MACHINE/WEBROOT/APPHOST"
 
-    # -- Esperar a que W3SVC levante el sitio por defecto --
-    $retries = 0
-    while ($retries -lt 10) {
-        $site = Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
-        if ($site) { break }
-        Start-Sleep -Seconds 2
-        $retries++
-    }
+    # ── FIX: Detener W3SVC antes de modificar applicationHost.config ──
+    # El archivo queda bloqueado con handle exclusivo mientras el servicio corre.
+    Write-LogInfo "Deteniendo W3SVC para modificar configuracion..."
+    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
 
     # -- Cambiar binding del sitio al puerto deseado --
     try {
-        $site = Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
+        # Modificar directamente el XML de applicationHost.config con .NET
+        # para evitar la restriccion de escritura del provider WebAdministration
+        $configPath = "$env:SystemRoot\system32\inetsrv\config\applicationHost.config"
+        [xml]$config = Get-Content $configPath
+
+        $sites = $config.configuration.'system.applicationHost'.sites
+        $site  = $sites.site | Where-Object { $_.name -eq "Default Web Site" }
+
         if ($site) {
-            # Quitar todos los bindings existentes y crear uno nuevo en el puerto correcto
-            Remove-WebBinding -Name "Default Web Site" -ErrorAction SilentlyContinue
-            New-WebBinding -Name "Default Web Site" -Protocol "http" -Port $Port -IPAddress "*" | Out-Null
+            # Eliminar todos los bindings y crear uno limpio
+            $bindingsNode = $site.bindings
+            $bindingsNode.RemoveAll()
+            $newBinding = $config.CreateElement("binding")
+            $newBinding.SetAttribute("protocol", "http")
+            $newBinding.SetAttribute("bindingInformation", "*:${Port}:")
+            $bindingsNode.AppendChild($newBinding) | Out-Null
+            $config.Save($configPath)
             Write-LogInfo "Binding IIS configurado en puerto $Port"
         } else {
-            Write-LogWarn "Sitio 'Default Web Site' no encontrado, se omite cambio de binding."
+            Write-LogWarn "Sitio 'Default Web Site' no encontrado en applicationHost.config"
         }
+
+        # -- Hardening en applicationHost.config via XML directo --
+        # removeServerHeader
+        $rf = $config.configuration.'system.webServer'.security.requestFiltering
+        if ($rf) {
+            $rf.SetAttribute("removeServerHeader", "true")
+        }
+
+        # Verbos peligrosos
+        $verbs = $config.configuration.'system.webServer'.security.requestFiltering.verbs
+        if (-not $verbs) {
+            $verbs = $config.CreateElement("verbs")
+            $config.configuration.'system.webServer'.security.requestFiltering.AppendChild($verbs) | Out-Null
+        }
+        foreach ($v in @("TRACE", "TRACK")) {
+            $exists = $verbs.add | Where-Object { $_.verb -eq $v }
+            if (-not $exists) {
+                $vNode = $config.CreateElement("add")
+                $vNode.SetAttribute("verb", $v)
+                $vNode.SetAttribute("allowed", "false")
+                $verbs.AppendChild($vNode) | Out-Null
+            }
+        }
+        $config.Save($configPath)
+
     } catch {
-        Write-LogWarn "No se pudo cambiar el binding: $_"
+        Write-LogWarn "Error modificando applicationHost.config directamente: $_"
     }
 
-    # -- Eliminar X-Powered-By --
-    try {
-        $filter = "system.webServer/httpProtocol/customHeaders"
-        $headers = Get-WebConfigurationProperty -PSPath $pspath -Filter $filter -Name "." -ErrorAction SilentlyContinue
-        if ($headers -and $headers.Collection) {
-            $xpb = $headers.Collection | Where-Object { $_.name -eq "X-Powered-By" }
-            if ($xpb) {
-                Remove-WebConfigurationProperty -PSPath $pspath -Filter $filter -Name "." `
-                    -AtElement @{name = "X-Powered-By"} -ErrorAction SilentlyContinue
-            }
-        }
-    } catch { Write-LogWarn "No se pudo eliminar X-Powered-By: $_" }
+    # -- Headers de seguridad via web.config del sitio (no requiere applicationHost.config) --
+    $webConfig = "C:\inetpub\wwwroot\web.config"
+    $webConfigContent = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <httpProtocol>
+      <customHeaders>
+        <remove name="X-Powered-By" />
+        <add name="X-Frame-Options" value="SAMEORIGIN" />
+        <add name="X-Content-Type-Options" value="nosniff" />
+      </customHeaders>
+    </httpProtocol>
+    <security>
+      <requestFiltering removeServerHeader="true">
+        <verbs>
+          <add verb="TRACE" allowed="false" />
+          <add verb="TRACK" allowed="false" />
+        </verbs>
+      </requestFiltering>
+    </security>
+  </system.webServer>
+</configuration>
+"@
+    [System.IO.File]::WriteAllText($webConfig, $webConfigContent, [System.Text.UTF8Encoding]::new($false))
+    Write-LogInfo "Headers de seguridad aplicados via web.config"
 
-    # -- Agregar headers de seguridad (idempotente) --
-    $secHeaders = @(
-        @{ name = "X-Frame-Options";       value = "SAMEORIGIN" },
-        @{ name = "X-Content-Type-Options"; value = "nosniff"   }
-    )
-    $filter = "system.webServer/httpProtocol/customHeaders"
-    foreach ($h in $secHeaders) {
-        try {
-            $existing = Get-WebConfigurationProperty -PSPath $pspath -Filter $filter -Name "." -ErrorAction SilentlyContinue
-            $found = $existing.Collection | Where-Object { $_.name -eq $h.name }
-            if (-not $found) {
-                Add-WebConfigurationProperty -PSPath $pspath -Filter $filter `
-                    -Name "." -Value $h -ErrorAction SilentlyContinue
-            }
-        } catch { Write-LogWarn "Header $($h.name): $_" }
-    }
-
-    # -- removeServerHeader --
-    try {
-        Set-WebConfigurationProperty -PSPath $pspath `
-            -Filter "system.webServer/security/requestFiltering" `
-            -Name "removeServerHeader" -Value $true -ErrorAction SilentlyContinue
-    } catch { Write-LogWarn "removeServerHeader: $_" }
-
-    # -- Restringir verbos peligrosos (idempotente) --
-    $verbFilter = "system.webServer/security/requestFiltering/verbs"
-    foreach ($verb in @("TRACE", "TRACK")) {
-        try {
-            $existing = Get-WebConfigurationProperty -PSPath $pspath -Filter $verbFilter `
-                -Name "." -ErrorAction SilentlyContinue
-            $found = $existing.Collection | Where-Object { $_.verb -eq $verb }
-            if (-not $found) {
-                Add-WebConfigurationProperty -PSPath $pspath -Filter $verbFilter `
-                    -Name "." -Value @{verb = $verb; allowed = $false} -ErrorAction SilentlyContinue
-            } else {
-                Write-LogInfo "Verbo $verb ya restringido."
-            }
-        } catch { Write-LogWarn "Verbo $verb ya existia o no se pudo agregar." }
-    }
+    # -- Reiniciar W3SVC tras los cambios --
+    Write-LogInfo "Reiniciando W3SVC..."
+    Start-Service W3SVC -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
 }
 
 function Set-FirewallRule ([int]$Port, [string]$Svc) {
@@ -250,16 +282,17 @@ function Install-IIS ([int]$Port, [string]$Version) {
         }
     }
 
-    # Asegurar que W3SVC existe y esta corriendo antes de tocar WebAdministration
+    # Arrancar W3SVC inicial para que cree la estructura de directorios
     Start-Service W3SVC -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 3
 
+    # Aplicar hardening (detiene W3SVC internamente, modifica config, lo reinicia)
     Apply-IISHardening -Port $Port
-    Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
-    Set-ServiceUserAndPermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
 
-    # Reiniciar para aplicar cambios
-    Restart-Service W3SVC -Force -ErrorAction SilentlyContinue
+    Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
+
+    # Permisos: svc_iis + IUSR + IIS_IUSRS (necesarios para acceso anonimo)
+    Set-ServiceUserAndPermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
 }
 
 function Install-ApacheHTTP ([int]$Port, [string]$Version) {
@@ -268,17 +301,15 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     Write-LogInfo "Instalando Apache $Version via Chocolatey..."
     choco install apache-httpd --version=$Version -y --no-progress 2>&1 | Out-Null
 
-    # Detectar ruta real de instalacion (choco puede variar segun version)
     $candidates = @(
         "C:\tools\apache24",
         "C:\Apache24",
         "C:\Program Files\Apache Software Foundation\Apache2.4",
         "$env:SystemDrive\tools\Apache24"
     )
-    # Tambien buscar via choco lib
     $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\apache-httpd"
     if (Test-Path $chocoLib) {
-        $subdir = Get-ChildItem $chocoLib -Directory | Select-Object -First 1
+        $subdir = Get-ChildItem $chocoLib -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($subdir) { $candidates = @($subdir.FullName) + $candidates }
     }
 
@@ -295,21 +326,16 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
         return
     }
 
-    # Aplicar configuracion de puerto y hardening
     $c = Get-Content $conf -Raw
-    $c = $c -replace '(?m)^Listen\s+80\b', "Listen $Port"
-    $c = $c -replace '(?m)^#?ServerTokens\s+\w+', "ServerTokens Prod"
-    $c = $c -replace '(?m)^#?ServerSignature\s+\w+', "ServerSignature Off"
+    $c = $c -replace '(?m)^Listen\s+80\b',              "Listen $Port"
+    $c = $c -replace '(?m)^#?ServerTokens\s+\w+',       "ServerTokens Prod"
+    $c = $c -replace '(?m)^#?ServerSignature\s+\w+',    "ServerSignature Off"
+    $c = $c -replace '#LoadModule headers_module',       'LoadModule headers_module'
 
-    # Asegurar modulo headers habilitado
-    $c = $c -replace '#LoadModule headers_module', 'LoadModule headers_module'
-
-    # Agregar headers de seguridad al final (idempotente)
     if ($c -notmatch "X-Frame-Options") {
         $c += "`r`nHeader always set X-Frame-Options SAMEORIGIN"
         $c += "`r`nHeader always set X-Content-Type-Options nosniff"
     }
-    # Restringir metodos peligrosos (idempotente)
     if ($c -notmatch "LimitExcept") {
         $c += @"
 
@@ -326,7 +352,6 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     Set-ServiceUserAndPermissions -ServiceName "apache" -Path "$apachePath\htdocs"
     Generate-IndexHtml -Path "$apachePath\htdocs\index.html" -Svc "Apache" -Ver $Version -Port $Port
 
-    # Registrar servicio si no existe
     $svcName = "Apache"
     if (-not (Get-Service $svcName -ErrorAction SilentlyContinue)) {
         $httpd = "$apachePath\bin\httpd.exe"
@@ -364,11 +389,10 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
     }
 
     $c = Get-Content $conf -Raw
-    $c = $c -replace 'listen\s+80;', "listen $Port;"
-    $c = $c -replace 'listen\s+\[::\]:80;', "listen [::]:$Port;"
+    $c = $c -replace 'listen\s+80;',         "listen $Port;"
+    $c = $c -replace 'listen\s+\[::\]:80;',  "listen [::]:$Port;"
     $c = $c -replace '#?\s*server_tokens\s+\w+;', "server_tokens off;"
 
-    # Agregar headers de seguridad dentro del bloque server (idempotente)
     if ($c -notmatch "X-Frame-Options") {
         $c = $c -replace '(server\s*\{)', "`$1`n        add_header X-Frame-Options SAMEORIGIN;`n        add_header X-Content-Type-Options nosniff;"
     }
@@ -378,7 +402,6 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
     Set-ServiceUserAndPermissions -ServiceName "nginx" -Path "$nginxPath\html"
     Generate-IndexHtml -Path "$nginxPath\html\index.html" -Svc "Nginx" -Ver $Version -Port $Port
 
-    # Registrar como servicio si no existe (usando nssm si disponible, sino sc.exe)
     if (-not (Get-Service nginx -ErrorAction SilentlyContinue)) {
         $nginxExe = "$nginxPath\nginx.exe"
         if (Get-Command nssm -ErrorAction SilentlyContinue) {
@@ -407,7 +430,7 @@ function Install-WebServer ([string]$Service, [int]$Port, [string]$Version) {
     }
 
     switch ($Service.ToLower()) {
-        "iis"    { Install-IIS      -Port $Port -Version $Version }
+        "iis"    { Install-IIS        -Port $Port -Version $Version }
         "apache" { Install-ApacheHTTP -Port $Port -Version $Version }
         "nginx"  { Install-NginxHTTP  -Port $Port -Version $Version }
         default  { Write-LogError "Servicio no soportado: $Service"; return }
@@ -427,7 +450,7 @@ function Show-Status {
         Select-Object Name, Status | Format-Table -AutoSize
     Write-Host "`n--- PUERTOS HTTP ACTIVOS ---" -ForegroundColor White
     Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-        Where-Object { $_.LocalPort -in @(80, 443, 3001..3010) } |
+        Where-Object { $_.LocalPort -in (80, 443, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 3010) } |
         Select-Object LocalAddress, LocalPort, OwningProcess |
         Format-Table -AutoSize
 }
@@ -436,18 +459,19 @@ function Invoke-Purge {
     Write-LogWarn "Iniciando purga total de servicios HTTP..."
     Stop-Service W3SVC, Apache*, nginx -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
-    sc.exe delete nginx 2>$null | Out-Null
+    sc.exe delete nginx  2>$null | Out-Null
     sc.exe delete Apache 2>$null | Out-Null
 
     Ensure-Chocolatey
     choco uninstall nginx apache-httpd -y --remove-dependencies 2>&1 | Out-Null
 
     try {
-        Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -ErrorAction SilentlyContinue | Out-Null
+        Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" `
+            -NoRestart -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 
-    # Limpiar reglas de firewall del script
-    Get-NetFirewallRule -DisplayName "HTTP-Allow-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    Get-NetFirewallRule -DisplayName "HTTP-Allow-*" -ErrorAction SilentlyContinue |
+        Remove-NetFirewallRule
 
     Write-LogSuccess "Purga completada."
 }
@@ -493,7 +517,7 @@ Uso: .\http_deploy.ps1 [-Service iis|apache|nginx] [-Port <num>]
                        [-ServiceVersion <ver>] [-ListVersions] [-Status] [-Purge]
 
 Ejemplos:
-  .\http_deploy.ps1 -Service nginx -Port 3001
+  .\http_deploy.ps1 -Service nginx  -Port 3001
   .\http_deploy.ps1 -Service apache -Port 3002 -ServiceVersion 2.4.55
   .\http_deploy.ps1 -ListVersions -Service nginx
   .\http_deploy.ps1 -Status
@@ -505,7 +529,6 @@ Ejemplos:
     if ($Status) { Show-Status; return }
     if ($Purge)  { Invoke-Purge; return }
 
-    # Modo no-interactivo (parametros por linea de comando)
     if ($Service -ne "") {
         if ($ListVersions) {
             Write-LogInfo "Versiones disponibles para ${Service}:"
