@@ -38,6 +38,14 @@ check_port() {
     fi
 }
 
+wait_for_apt_lock() {
+    log_info "Verificando bloqueos de apt/dpkg..."
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+        log_warn "El sistema está realizando actualizaciones en segundo plano. Esperando 5 segundos..."
+        sleep 5
+    done
+}
+
 configure_firewall() {
     local port=$1
     log_info "Configurando Firewall (UFW)..."
@@ -169,6 +177,31 @@ WantedBy=multi-user.target" > /etc/systemd/system/tomcat$major.service
     systemctl enable tomcat$major --now
 }
 
+purge_services() {
+    check_root
+    log_warn "Iniciando purga total de servicios HTTP..."
+    
+    log_info "Deteniendo servicios..."
+    systemctl stop apache2 nginx tomcat* 2>/dev/null || true
+    systemctl disable apache2 nginx tomcat* 2>/dev/null || true
+    
+    log_info "Eliminando paquetes..."
+    apt-get purge -y apache2 apache2-utils nginx nginx-common tomcat9 tomcat9-common default-jdk 2>/dev/null || true
+    apt-get autoremove -y >/dev/null 2>&1 || true
+    
+    log_info "Limpiando archivos de configuración y datos..."
+    rm -rf /etc/apache2 /etc/nginx /etc/tomcat*
+    rm -rf /var/www/html/*
+    rm -rf /opt/tomcat*
+    rm -f /etc/systemd/system/tomcat*.service
+    systemctl daemon-reload
+    
+    log_info "Eliminando usuarios de servicio..."
+    userdel -r tomcat 2>/dev/null || true
+    
+    log_success "Purga completada."
+}
+
 # ==============================================================================
 # MAIN
 # ==============================================================================
@@ -204,9 +237,8 @@ main() {
     fi
 
     if $purge; then
-        check_root
-        apt-get purge -y apache2 nginx tomcat9 >/dev/null 2>&1 || true
-        rm -rf /opt/tomcat* /var/www/html/*
+        wait_for_apt_lock
+        purge_services
         exit 0
     fi
 
@@ -225,7 +257,8 @@ main() {
     fi
 
     if [[ "$port" -eq 0 ]]; then log_error "Puerto es obligatorio"; fi
-
+    
+    wait_for_apt_lock
     case $service in
         apache) install_apache "$port" "${version:-2.4.58}" ;;
         nginx)  install_nginx "$port" "${version:-1.24.0}" ;;
