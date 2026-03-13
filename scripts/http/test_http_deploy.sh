@@ -5,8 +5,14 @@
 # ==============================================================================
 set -euo pipefail
 
-SCRIPT="./http_deploy.sh"
-LOG_FILE="./test_results.log"
+# Definir rutas absolutas
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT="$SCRIPT_DIR/http_deploy.sh"
+LOG_FILE="$SCRIPT_DIR/test_results.log"
+
+# Asegurar permisos de ejecucion
+chmod +x "$SCRIPT"
+
 SERVICES=("apache" "nginx" "tomcat")
 BASE_PORT=3010
 
