@@ -101,12 +101,46 @@ install_apache() {
 
     # Validar existencia de archivos de configuracion
     if [[ ! -f "/etc/apache2/ports.conf" ]]; then
-        log_warn "ports.conf no encontrado. Intentando recuperar configuracion base..."
-        apt-get install -y -qq --reinstall apache2-common
+        log_warn "ports.conf no encontrado. Intentando recuperar..."
+        apt-get install -y -qq --reinstall apache2 apache2-data apache2-bin 2>/dev/null || true
     fi
 
+    # Fallback: Crear configuracion minima si sigue faltando
     if [[ ! -f "/etc/apache2/ports.conf" ]]; then
-        log_error "No se pudo recuperar la configuracion de Apache. Abortando."
+        log_warn "No se pudo recuperar ports.conf via apt. Creando configuracion manual..."
+        mkdir -p /etc/apache2
+        echo "Listen 80
+<IfModule ssl_module>
+    Listen 443
+</IfModule>
+<IfModule mod_gnutls.c>
+    Listen 443
+</IfModule>" > /etc/apache2/ports.conf
+    fi
+
+    if [[ ! -f "/etc/apache2/apache2.conf" ]]; then
+        log_warn "apache2.conf no encontrado. Creando configuracion basica..."
+        echo "DefaultRuntimeDir \${APACHE_RUN_DIR}
+PidFile \${APACHE_PID_FILE}
+Timeout 300
+KeepAlive On
+MaxKeepAliveRequests 100
+KeepAliveTimeout 5
+User \${APACHE_RUN_USER}
+Group \${APACHE_RUN_GROUP}
+HostnameLookups Off
+ErrorLog \${APACHE_LOG_DIR}/error.log
+LogLevel warn
+IncludeOptional mods-enabled/*.load
+IncludeOptional mods-enabled/*.conf
+Include ports.conf
+<Directory />
+    Options FollowSymLinks
+    AllowOverride None
+    Require all denied
+</Directory>
+IncludeOptional conf-enabled/*.conf
+IncludeOptional sites-enabled/*.conf" > /etc/apache2/apache2.conf
     fi
     
     # Hardening
