@@ -62,29 +62,33 @@ function Find-ApachePath {
     # 1. Rutas fijas conocidas
     $fixed = @(
         "C:\tools\apache24",
+        "C:\tools\apache-httpd",
         "C:\Apache24",
         "C:\Program Files\Apache Software Foundation\Apache2.4",
-        "$env:SystemDrive\tools\Apache24"
+        "$env:SystemDrive\tools\Apache24",
+        "$env:SystemDrive\tools\apache-httpd"
     )
     foreach ($p in $fixed) {
         if (Test-Path "$p\bin\httpd.exe") { return $p }
     }
 
-    # 2. Buscar dentro del directorio de choco lib buscando bin\httpd.exe
-    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\apache-httpd"
-    if (Test-Path $chocoLib) {
-        # Buscar recursivamente httpd.exe y subir dos niveles (tools\apache24\bin\httpd.exe)
-        $found = Get-ChildItem -Path $chocoLib -Recurse -Filter "httpd.exe" -ErrorAction SilentlyContinue |
-                 Select-Object -First 1
-        if ($found) {
-            # httpd.exe esta en <path>\bin\httpd.exe -> devolver <path>
-            return Split-Path $found.DirectoryName -Parent
+    # 2. Preguntar a choco por la ruta de instalacion
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        $pathInfo = choco list -lo --id-only --limit-output --path | Select-String "apache-httpd"
+        if ($pathInfo) {
+            $p = ($pathInfo.ToString() -split '\|')[1]
+            if (Test-Path "$p\bin\httpd.exe") { return $p }
+            # A veces choco devuelve la carpeta lib, buscar bin dentro
+            $found = Get-ChildItem -Path $p -Recurse -Filter "httpd.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { return Split-Path $found.DirectoryName -Parent }
         }
     }
 
-    # 3. Buscar httpd.exe en PATH
-    $inPath = Get-Command "httpd.exe" -ErrorAction SilentlyContinue
-    if ($inPath) { return Split-Path (Split-Path $inPath.Source -Parent) -Parent }
+    # 3. Buscar httpd.exe en todo C:\tools (ultimo recurso rapido)
+    if (Test-Path "C:\tools") {
+        $found = Get-ChildItem -Path "C:\tools" -Recurse -Filter "httpd.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) { return Split-Path $found.DirectoryName -Parent }
+    }
 
     return $null
 }
@@ -100,15 +104,20 @@ function Find-NginxPath {
         if (Test-Path "$p\nginx.exe") { return $p }
     }
 
-    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\nginx"
-    if (Test-Path $chocoLib) {
-        $found = Get-ChildItem -Path $chocoLib -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue |
-                 Select-Object -First 1
-        if ($found) { return $found.DirectoryName }
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        $pathInfo = choco list -lo --id-only --limit-output --path | Select-String "nginx"
+        if ($pathInfo) {
+            $p = ($pathInfo.ToString() -split '\|')[1]
+            if (Test-Path "$p\nginx.exe") { return $p }
+            $found = Get-ChildItem -Path $p -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { return $found.DirectoryName }
+        }
     }
 
-    $inPath = Get-Command "nginx.exe" -ErrorAction SilentlyContinue
-    if ($inPath) { return Split-Path $inPath.Source -Parent }
+    if (Test-Path "C:\tools") {
+        $found = Get-ChildItem -Path "C:\tools" -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) { return $found.DirectoryName }
+    }
 
     return $null
 }
@@ -323,27 +332,38 @@ function Install-IIS ([int]$Port, [string]$Version) {
 
     Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
     Set-ServiceUserAndPermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
+    return $true
 }
 
 function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     Ensure-Chocolatey
 
     Write-LogInfo "Instalando Apache $Version via Chocolatey..."
-    choco install apache-httpd --version=$Version -y --no-progress 2>&1 | Out-Null
+    # Mostrar salida para depuracion si falla
+    choco install apache-httpd --version=$Version -y --no-progress
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1603 -and $LASTEXITCODE -ne 3010) {
+        Write-LogError "Fallo la instalacion de Apache via Chocolatey (ExitCode: $LASTEXITCODE)."
+        return $false
+    }
 
-    # ── FIX: usar Find-ApachePath que valida bin\httpd.exe en lugar de
-    #    Get-ChildItem que devuelvia 'legal' como primer subdirectorio ──
     $apachePath = Find-ApachePath
     if (-not $apachePath) {
         Write-LogError "No se encontro la instalacion de Apache (bin\httpd.exe no localizado)."
-        return
+        return $false
     }
     Write-LogInfo "Apache encontrado en: $apachePath"
 
     $conf = "$apachePath\conf\httpd.conf"
     if (-not (Test-Path $conf)) {
-        Write-LogError "httpd.conf no encontrado en $conf"
-        return
+        # Reintentar buscar mas profundo
+        $confFound = Get-ChildItem -Path $apachePath -Recurse -Filter "httpd.conf" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($confFound) {
+            $conf = $confFound.FullName
+            $apachePath = Split-Path (Split-Path $conf -Parent) -Parent
+        } else {
+            Write-LogError "httpd.conf no encontrado en $apachePath"
+            return $false
+        }
     }
 
     $c = Get-Content $conf -Raw
@@ -374,26 +394,30 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
         }
     }
     Restart-Service "Apache*" -Force -ErrorAction SilentlyContinue
+    return $true
 }
 
 function Install-NginxHTTP ([int]$Port, [string]$Version) {
     Ensure-Chocolatey
 
     Write-LogInfo "Instalando Nginx $Version via Chocolatey..."
-    choco install nginx --version=$Version -y --no-progress 2>&1 | Out-Null
+    choco install nginx --version=$Version -y --no-progress
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1603 -and $LASTEXITCODE -ne 3010) {
+        Write-LogError "Fallo la instalacion de Nginx via Chocolatey (ExitCode: $LASTEXITCODE)."
+        return $false
+    }
 
-    # ── FIX: usar Find-NginxPath que valida nginx.exe ──
     $nginxPath = Find-NginxPath
     if (-not $nginxPath) {
         Write-LogError "No se encontro la instalacion de Nginx (nginx.exe no localizado)."
-        return
+        return $false
     }
     Write-LogInfo "Nginx encontrado en: $nginxPath"
 
     $conf = "$nginxPath\conf\nginx.conf"
     if (-not (Test-Path $conf)) {
         Write-LogError "nginx.conf no encontrado en $conf"
-        return
+        return $false
     }
 
     $c = Get-Content $conf -Raw
@@ -420,6 +444,7 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
         Write-LogInfo "Servicio nginx registrado."
     }
     Restart-Service nginx -Force -ErrorAction SilentlyContinue
+    return $true
 }
 
 # ==============================================================================
@@ -437,15 +462,20 @@ function Install-WebServer ([string]$Service, [int]$Port, [string]$Version) {
         return
     }
 
+    $success = $false
     switch ($Service.ToLower()) {
-        "iis"    { Install-IIS        -Port $Port -Version $Version }
-        "apache" { Install-ApacheHTTP -Port $Port -Version $Version }
-        "nginx"  { Install-NginxHTTP  -Port $Port -Version $Version }
+        "iis"    { $success = Install-IIS        -Port $Port -Version $Version; if ($null -eq $success) { $success = $true } }
+        "apache" { $success = Install-ApacheHTTP -Port $Port -Version $Version }
+        "nginx"  { $success = Install-NginxHTTP  -Port $Port -Version $Version }
         default  { Write-LogError "Servicio no soportado: $Service"; return }
     }
 
-    Set-FirewallRule -Port $Port -Svc $Service
-    Write-LogSuccess "Servicio $Service desplegado con exito en puerto $Port."
+    if ($success) {
+        Set-FirewallRule -Port $Port -Svc $Service
+        Write-LogSuccess "Servicio $Service desplegado con exito en puerto $Port."
+    } else {
+        Write-LogError "No se pudo completar el despliegue de $Service."
+    }
 }
 
 # ==============================================================================
