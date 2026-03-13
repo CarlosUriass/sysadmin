@@ -51,7 +51,6 @@ configure_firewall() {
     log_info "Configurando Firewall (UFW)..."
     if command -v ufw >/dev/null; then
         ufw allow "$port"/tcp comment "HTTP Practice 6" >/dev/null
-        # Cerrar puertos por defecto si no se usan (simulacion interactiva suele ser peligrosa, solo informamos)
         log_info "Puerto $port habilitado en UFW."
     fi
 }
@@ -76,6 +75,7 @@ generate_index() {
     local srv=$2
     local ver=$3
     local port=$4
+    mkdir -p "$(dirname "$path")"
     echo "<h1>Servidor: $srv - Version: $ver - Puerto: $port</h1><p>Aprovisionamiento Automatizado - Linux (Practica 6)</p><p>Fecha: $(date)</p>" > "$path"
 }
 
@@ -84,11 +84,10 @@ install_apache() {
     local ver=$2
     check_port "$p"
     log_info "Instalando Apache..."
-    
-    # Prevenir inicio automatico durante instalacion
+
     echo "exit 101" > /usr/sbin/policy-rc.d
     chmod +x /usr/sbin/policy-rc.d
-    
+
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     if ! apt-get install -y -qq apache2; then
@@ -96,16 +95,14 @@ install_apache() {
         apt-get install -f -y -qq
         apt-get install -y -qq --reinstall apache2
     fi
-    
+
     rm -f /usr/sbin/policy-rc.d
 
-    # Validar existencia de archivos de configuracion
     if [[ ! -f "/etc/apache2/ports.conf" ]]; then
         log_warn "ports.conf no encontrado. Intentando recuperar..."
         apt-get install -y -qq --reinstall apache2 apache2-data apache2-bin 2>/dev/null || true
     fi
 
-    # Fallback: Crear configuracion minima si sigue faltando
     if [[ ! -f "/etc/apache2/ports.conf" ]]; then
         log_warn "No se pudo recuperar ports.conf via apt. Creando configuracion manual..."
         mkdir -p /etc/apache2
@@ -142,23 +139,19 @@ Include ports.conf
 IncludeOptional conf-enabled/*.conf
 IncludeOptional sites-enabled/*.conf" > /etc/apache2/apache2.conf
     fi
-    
-    # Hardening
+
     sed -i "s/Listen 80/Listen $p/" /etc/apache2/ports.conf
-    # Asegurar que security.conf existe
+
     if [[ -f "/etc/apache2/conf-available/security.conf" ]]; then
         sed -i "s/ServerTokens .*/ServerTokens Prod/" /etc/apache2/conf-available/security.conf
         sed -i "s/ServerSignature .*/ServerSignature Off/" /etc/apache2/conf-available/security.conf
         a2enconf security >/dev/null 2>&1 || true
     fi
-    
-    # Encabezados de Seguridad
+
     a2enmod headers >/dev/null 2>&1 || true
-    # Evitar duplicados si el script se corre varias veces
     grep -q "X-Frame-Options" /etc/apache2/apache2.conf || echo "Header set X-Frame-Options: SAMEORIGIN" >> /etc/apache2/apache2.conf
     grep -q "X-Content-Type-Options" /etc/apache2/apache2.conf || echo "Header set X-Content-Type-Options: nosniff" >> /etc/apache2/apache2.conf
-    
-    # Restringir metodos
+
     if ! grep -q "<LimitExcept GET POST>" /etc/apache2/apache2.conf; then
         echo "<Directory /var/www/html/>
     <LimitExcept GET POST>
@@ -177,8 +170,7 @@ install_nginx() {
     local ver=$2
     check_port "$p"
     log_info "Instalando Nginx..."
-    
-    # Prevenir inicio automatico durante instalacion
+
     echo "exit 101" > /usr/sbin/policy-rc.d
     chmod +x /usr/sbin/policy-rc.d
 
@@ -189,14 +181,52 @@ install_nginx() {
         apt-get install -f -y -qq
         apt-get install -y -qq --reinstall nginx
     fi
-    
+
     rm -f /usr/sbin/policy-rc.d
 
+    # ── FIX: Crear nginx.conf mínimo si no existe (instalación fallida/parcial) ──
+    local nginx_conf="/etc/nginx/nginx.conf"
+    if [[ ! -f "$nginx_conf" ]]; then
+        log_warn "nginx.conf no encontrado. Creando configuracion basica..."
+        mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/conf.d
+        cat > "$nginx_conf" <<'EOF'
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+    worker_connections 768;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    types_hash_max_size 2048;
+    server_tokens off;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    gzip on;
+
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}
+EOF
+        log_info "nginx.conf creado manualmente."
+    fi
+
+    # ── Crear/ajustar site default ──
     local conf="/etc/nginx/sites-available/default"
     if [[ ! -f "$conf" ]]; then
-        log_warn "Archivo $conf no encontrado. Intentando crear configuración básica..."
-        mkdir -p /etc/nginx/sites-available
-        echo "server {
+        log_warn "Archivo $conf no encontrado. Creando configuracion basica..."
+        mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+        cat > "$conf" <<EOF
+server {
     listen 80 default_server;
     listen [::]:80 default_server;
     root /var/www/html;
@@ -205,51 +235,60 @@ install_nginx() {
     location / {
         try_files \$uri \$uri/ =404;
     }
-}" > "$conf"
+}
+EOF
         ln -sf "$conf" /etc/nginx/sites-enabled/default 2>/dev/null || true
     fi
 
+    # Ajustar puerto en el site
     sed -i "s/listen 80 default_server;/listen $p default_server;/" "$conf"
     sed -i "s/listen \[::\]:80 default_server;/listen [::]:$p default_server;/" "$conf"
-    
-    # Hardening y Headers en nginx.conf
-    sed -i "s/# server_tokens off;/server_tokens off;/" /etc/nginx/nginx.conf
-    sed -i "/http {/a \    add_header X-Frame-Options SAMEORIGIN;\n    add_header X-Content-Type-Options nosniff;" /etc/nginx/nginx.conf
+
+    # ── Hardening en nginx.conf (idempotente) ──
+    # server_tokens off ya incluido en el bloque http del fallback; aplicar si existía antes
+    sed -i "s/# server_tokens off;/server_tokens off;/" "$nginx_conf" 2>/dev/null || true
+
+    # Añadir headers de seguridad solo si no existen ya
+    if ! grep -q "X-Frame-Options" "$nginx_conf"; then
+        sed -i "/http {/a\\    add_header X-Frame-Options SAMEORIGIN;\n    add_header X-Content-Type-Options nosniff;" "$nginx_conf"
+    fi
 
     generate_index "/var/www/html/index.html" "Nginx" "$ver" "$p"
     create_service_user "www-data" "/var/www/html"
+
+    # Validar configuracion antes de arrancar
+    if ! nginx -t 2>/dev/null; then
+        log_error "Configuracion de Nginx invalida. Revisa $nginx_conf y $conf"
+    fi
+
     systemctl restart nginx
 }
 
 install_tomcat() {
     local p=$1
-    local ver=$2 # Ej: 9.0.98
+    local ver=$2
     check_port "$p"
     log_info "Instalando Tomcat $ver (Binario)..."
-    
-    # Requerimientos para tomcat (Java)
+
     apt-get update -qq && apt-get install -y -qq default-jdk wget tar
-    
+
     local major=$(echo "$ver" | cut -d. -f1)
     local url="https://archive.apache.org/dist/tomcat/tomcat-$major/v$ver/bin/apache-tomcat-$ver.tar.gz"
     local dest="/opt/tomcat$major"
-    
+
     if [[ ! -d "$dest" ]]; then
         mkdir -p "$dest"
         wget -qO /tmp/tomcat.tar.gz "$url"
         tar -xzf /tmp/tomcat.tar.gz -C "$dest" --strip-components=1
     fi
-    
-    # Cambiar puerto
+
     sed -i "s/port=\"8080\"/port=\"$p\"/" "$dest/conf/server.xml"
-    
-    # Hardening básico tomcat (remover version de logs y errores suele requerir valve config, lo omitimos por simplicidad en shell)
-    
+
     generate_index "$dest/webapps/ROOT/index.html" "Tomcat" "$ver" "$p"
     create_service_user "tomcat" "$dest"
-    
-    # Preparar servicio SystemD
-    echo "[Unit]
+
+    cat > /etc/systemd/system/tomcat$major.service <<EOF
+[Unit]
 Description=Apache Tomcat $major
 After=network.target
 
@@ -263,7 +302,8 @@ ExecStart=$dest/bin/startup.sh
 ExecStop=$dest/bin/shutdown.sh
 
 [Install]
-WantedBy=multi-user.target" > /etc/systemd/system/tomcat$major.service
+WantedBy=multi-user.target
+EOF
 
     systemctl daemon-reload
     systemctl enable tomcat$major --now
@@ -272,25 +312,25 @@ WantedBy=multi-user.target" > /etc/systemd/system/tomcat$major.service
 purge_services() {
     check_root
     log_warn "Iniciando purga total de servicios HTTP..."
-    
+
     log_info "Deteniendo servicios..."
     systemctl stop apache2 nginx tomcat* 2>/dev/null || true
     systemctl disable apache2 nginx tomcat* 2>/dev/null || true
-    
+
     log_info "Eliminando paquetes..."
     apt-get purge -y apache2 apache2-utils nginx nginx-common tomcat9 tomcat9-common default-jdk 2>/dev/null || true
     apt-get autoremove -y >/dev/null 2>&1 || true
-    
+
     log_info "Limpiando archivos de configuración y datos..."
     rm -rf /etc/apache2 /etc/nginx /etc/tomcat*
     rm -rf /var/www/html/*
     rm -rf /opt/tomcat*
     rm -f /etc/systemd/system/tomcat*.service
     systemctl daemon-reload
-    
+
     log_info "Eliminando usuarios de servicio..."
     userdel -r tomcat 2>/dev/null || true
-    
+
     log_success "Purga completada."
 }
 
@@ -349,11 +389,11 @@ main() {
     fi
 
     if [[ "$port" -eq 0 ]]; then log_error "Puerto es obligatorio"; fi
-    
+
     wait_for_apt_lock
     case $service in
         apache) install_apache "$port" "${version:-2.4.58}" ;;
-        nginx)  install_nginx "$port" "${version:-1.24.0}" ;;
+        nginx)  install_nginx  "$port" "${version:-1.24.0}" ;;
         tomcat) install_tomcat "$port" "${version:-9.0.98}" ;;
         *) log_error "Servicio no soportado" ;;
     esac
