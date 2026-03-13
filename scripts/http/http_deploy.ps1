@@ -102,25 +102,36 @@ function Find-ApachePath {
 
 # ── FIX: Busca la ruta de Nginx verificando que contenga nginx.exe ──
 function Find-NginxPath {
+    # 1. PATH lookup
+    $cmd = Get-Command "nginx.exe" -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return Split-Path $cmd.Source -Parent
+    }
+
+    # 2. Fixed paths
     $fixed = @(
         "C:\tools\nginx",
         "C:\nginx",
-        "$env:SystemDrive\tools\nginx"
+        "$env:SystemDrive\tools\nginx",
+        "$env:ProgramFiles\nginx"
     )
     foreach ($p in $fixed) {
         if (Test-Path "$p\nginx.exe") { return $p }
     }
 
+    # 3. Chocolatey lib lookup
     if (Get-Command choco -ErrorAction SilentlyContinue) {
-        $pathInfo = choco list -lo --id-only --limit-output --path | Select-String "nginx"
-        if ($pathInfo) {
-            $p = ($pathInfo.ToString() -split '\|')[1]
-            if (Test-Path "$p\nginx.exe") { return $p }
-            $found = Get-ChildItem -Path $p -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { return $found.DirectoryName }
+        $lo = choco list -lo --limit-output
+        if ($lo -match "nginx") {
+            $chocoPath = "$env:ALLUSERSPROFILE\chocolatey\lib\nginx"
+            if (Test-Path $chocoPath) {
+                $found = Get-ChildItem -Path $chocoPath -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($found) { return $found.DirectoryName }
+            }
         }
     }
 
+    # 4. Search in C:\tools
     if (Test-Path "C:\tools") {
         $found = Get-ChildItem -Path "C:\tools" -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($found) { return $found.DirectoryName }
