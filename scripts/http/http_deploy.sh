@@ -6,7 +6,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-UTILS_DIR="$SCRIPT_DIR/../../utils/sh"
 
 # ==============================================================================
 # LOGGING
@@ -63,9 +62,23 @@ create_service_user() {
     if ! id "$user" &>/dev/null; then
         useradd -r -s /usr/sbin/nologin "$user"
     fi
+    mkdir -p "$dir"
     chown -R "$user":"$user" "$dir"
     chmod -R 755 "$dir"
     log_info "Usuario dedicado '$user' configurado para el directorio $dir"
+}
+
+# Instala paquetes SIN policy-rc.d para que apt pueda iniciar servicios
+# y depositar todos los archivos de configuracion correctamente
+apt_install_safe() {
+    rm -f /usr/sbin/policy-rc.d
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    if ! apt-get install -y -qq "$@"; then
+        log_warn "Instalacion interrumpida, intentando reparar..."
+        apt-get install -f -y -qq
+        apt-get install -y -qq --reinstall "$@"
+    fi
 }
 
 # ==============================================================================
@@ -73,41 +86,41 @@ create_service_user() {
 # ==============================================================================
 
 generate_index() {
-    local path=$1
-    local srv=$2
-    local ver=$3
-    local port=$4
+    local path=$1 srv=$2 ver=$3 port=$4
     mkdir -p "$(dirname "$path")"
-    echo "<h1>Servidor: $srv - Version: $ver - Puerto: $port</h1><p>Aprovisionamiento Automatizado - Linux (Practica 6)</p><p>Fecha: $(date)</p>" > "$path"
+    cat > "$path" <<EOF
+<html><body>
+<h1>Servidor: $srv - Version: $ver - Puerto: $port</h1>
+<p>Aprovisionamiento Automatizado - Linux (Practica 6)</p>
+<p>Fecha: $(date)</p>
+</body></html>
+EOF
 }
 
+# ------------------------------------------------------------------------------
 install_apache() {
     local p=$1
     local ver=$2
     check_port "$p"
     log_info "Instalando Apache..."
 
-    echo "exit 101" > /usr/sbin/policy-rc.d
-    chmod +x /usr/sbin/policy-rc.d
+    # Instalar sin policy-rc.d para que apt deposite todos los archivos
+    apt_install_safe apache2 apache2-utils apache2-bin apache2-data
 
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    if ! apt-get install -y -qq apache2; then
-        log_warn "Instalacion interrumpida, intentando reparar y reinstalar..."
-        apt-get install -f -y -qq
-        apt-get install -y -qq --reinstall apache2
-    fi
+    # Verificar que los archivos esenciales existen tras la instalacion
+    if [[ ! -f "/etc/apache2/ports.conf" ]] || [[ ! -f "/etc/apache2/apache2.conf" ]]; then
+        log_warn "Archivos de configuracion faltantes tras apt. Recreando estructura..."
 
-    rm -f /usr/sbin/policy-rc.d
+        mkdir -p /etc/apache2/mods-enabled \
+                 /etc/apache2/mods-available \
+                 /etc/apache2/sites-enabled \
+                 /etc/apache2/sites-available \
+                 /etc/apache2/conf-enabled \
+                 /etc/apache2/conf-available \
+                 /var/www/html \
+                 /var/log/apache2 \
+                 /var/run/apache2
 
-    if [[ ! -f "/etc/apache2/ports.conf" ]]; then
-        log_warn "ports.conf no encontrado. Intentando recuperar via apt..."
-        apt-get install -y -qq --reinstall apache2 apache2-data apache2-bin 2>/dev/null || true
-    fi
-
-    if [[ ! -f "/etc/apache2/ports.conf" ]]; then
-        log_warn "No se pudo recuperar ports.conf via apt. Creando configuracion manual..."
-        mkdir -p /etc/apache2
         cat > /etc/apache2/ports.conf <<'EOF'
 Listen 80
 <IfModule ssl_module>
@@ -117,21 +130,18 @@ Listen 80
     Listen 443
 </IfModule>
 EOF
-    fi
 
-    if [[ ! -f "/etc/apache2/apache2.conf" ]]; then
-        log_warn "apache2.conf no encontrado. Creando configuracion basica..."
         cat > /etc/apache2/apache2.conf <<'EOF'
-DefaultRuntimeDir ${APACHE_RUN_DIR}
-PidFile ${APACHE_PID_FILE}
+DefaultRuntimeDir /var/run/apache2
+PidFile /var/run/apache2/apache2.pid
 Timeout 300
 KeepAlive On
 MaxKeepAliveRequests 100
 KeepAliveTimeout 5
-User ${APACHE_RUN_USER}
-Group ${APACHE_RUN_GROUP}
+User www-data
+Group www-data
 HostnameLookups Off
-ErrorLog ${APACHE_LOG_DIR}/error.log
+ErrorLog /var/log/apache2/error.log
 LogLevel warn
 IncludeOptional mods-enabled/*.load
 IncludeOptional mods-enabled/*.conf
@@ -141,13 +151,42 @@ Include ports.conf
     AllowOverride None
     Require all denied
 </Directory>
+<Directory /var/www/html>
+    Options Indexes FollowSymLinks
+    AllowOverride None
+    Require all granted
+</Directory>
 IncludeOptional conf-enabled/*.conf
 IncludeOptional sites-enabled/*.conf
 EOF
+
+        cat > /etc/apache2/envvars <<'EOF'
+export APACHE_RUN_USER=www-data
+export APACHE_RUN_GROUP=www-data
+export APACHE_PID_FILE=/var/run/apache2/apache2.pid
+export APACHE_RUN_DIR=/var/run/apache2
+export APACHE_LOCK_DIR=/var/lock/apache2
+export APACHE_LOG_DIR=/var/log/apache2
+export LANG=C
+EOF
+
+        cat > /etc/apache2/sites-available/000-default.conf <<'EOF'
+<VirtualHost *:80>
+    DocumentRoot /var/www/html
+    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog ${APACHE_LOG_DIR}/access.log combined
+</VirtualHost>
+EOF
+        ln -sf /etc/apache2/sites-available/000-default.conf \
+               /etc/apache2/sites-enabled/000-default.conf 2>/dev/null || true
     fi
 
+    # Ajustar puerto
     sed -i "s/Listen 80/Listen $p/" /etc/apache2/ports.conf
+    sed -i "s/<VirtualHost \*:80>/<VirtualHost *:$p>/" \
+        /etc/apache2/sites-available/000-default.conf 2>/dev/null || true
 
+    # Hardening
     if [[ -f "/etc/apache2/conf-available/security.conf" ]]; then
         sed -i "s/ServerTokens .*/ServerTokens Prod/" /etc/apache2/conf-available/security.conf
         sed -i "s/ServerSignature .*/ServerSignature Off/" /etc/apache2/conf-available/security.conf
@@ -155,12 +194,13 @@ EOF
     fi
 
     a2enmod headers >/dev/null 2>&1 || true
-    grep -q "X-Frame-Options" /etc/apache2/apache2.conf || \
-        echo "Header set X-Frame-Options: SAMEORIGIN" >> /etc/apache2/apache2.conf
-    grep -q "X-Content-Type-Options" /etc/apache2/apache2.conf || \
-        echo "Header set X-Content-Type-Options: nosniff" >> /etc/apache2/apache2.conf
 
-    if ! grep -q "<LimitExcept GET POST>" /etc/apache2/apache2.conf; then
+    grep -q "X-Frame-Options" /etc/apache2/apache2.conf || \
+        echo "Header set X-Frame-Options SAMEORIGIN" >> /etc/apache2/apache2.conf
+    grep -q "X-Content-Type-Options" /etc/apache2/apache2.conf || \
+        echo "Header set X-Content-Type-Options nosniff" >> /etc/apache2/apache2.conf
+
+    if ! grep -q "LimitExcept" /etc/apache2/apache2.conf; then
         cat >> /etc/apache2/apache2.conf <<'EOF'
 <Directory /var/www/html/>
     <LimitExcept GET POST>
@@ -170,31 +210,27 @@ EOF
 EOF
     fi
 
+    # Validar antes de arrancar
+    local test_out
+    test_out=$(apache2ctl configtest 2>&1) || log_error "Configuracion Apache invalida:\n$test_out"
+
     generate_index "/var/www/html/index.html" "Apache" "$ver" "$p"
     create_service_user "www-data" "/var/www/html"
-    systemctl restart apache2
+
+    systemctl enable apache2 2>/dev/null || true
+    systemctl restart apache2 || log_error "No se pudo iniciar apache2. Revisa: journalctl -xeu apache2.service"
 }
 
+# ------------------------------------------------------------------------------
 install_nginx() {
     local p=$1
     local ver=$2
     check_port "$p"
     log_info "Instalando Nginx..."
 
-    echo "exit 101" > /usr/sbin/policy-rc.d
-    chmod +x /usr/sbin/policy-rc.d
+    apt_install_safe nginx
 
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    if ! apt-get install -y -qq nginx; then
-        log_warn "Instalacion interrumpida, intentando reparar y reinstalar..."
-        apt-get install -f -y -qq
-        apt-get install -y -qq --reinstall nginx
-    fi
-
-    rm -f /usr/sbin/policy-rc.d
-
-    # ── Asegurar directorios necesarios ──
+    # Asegurar directorios necesarios
     mkdir -p /etc/nginx/sites-available \
              /etc/nginx/sites-enabled \
              /etc/nginx/conf.d \
@@ -203,31 +239,31 @@ install_nginx() {
              /var/lib/nginx/body \
              /run/nginx
 
-    # ── Crear mime.types mínimo si no existe ──
+    # mime.types minimo si no existe
     if [[ ! -f "/etc/nginx/mime.types" ]]; then
         log_warn "mime.types no encontrado. Creando version minima..."
         cat > /etc/nginx/mime.types <<'EOF'
 types {
-    text/html                             html htm shtml;
-    text/css                              css;
-    text/plain                            txt;
-    application/javascript                js;
-    application/json                      json;
-    image/png                             png;
-    image/jpeg                            jpeg jpg;
-    image/gif                             gif;
-    image/svg+xml                         svg svgz;
-    image/x-icon                          ico;
-    font/woff                             woff;
-    font/woff2                            woff2;
-    application/octet-stream              bin;
+    text/html                   html htm shtml;
+    text/css                    css;
+    text/plain                  txt;
+    application/javascript      js;
+    application/json            json;
+    image/png                   png;
+    image/jpeg                  jpeg jpg;
+    image/gif                   gif;
+    image/svg+xml               svg svgz;
+    image/x-icon                ico;
+    font/woff                   woff;
+    font/woff2                  woff2;
+    application/octet-stream    bin;
 }
 EOF
     fi
 
     local nginx_conf="/etc/nginx/nginx.conf"
 
-    # ── Crear nginx.conf sin dependencias opcionales problemáticas ──
+    # nginx.conf sin include modules-enabled (evita fallos por .so faltantes)
     if [[ ! -f "$nginx_conf" ]]; then
         log_warn "nginx.conf no encontrado. Creando configuracion basica..."
         cat > "$nginx_conf" <<'EOF'
@@ -262,14 +298,14 @@ http {
 EOF
         log_info "nginx.conf creado manualmente."
     else
-        # Hardening sobre nginx.conf existente (idempotente)
+        # Hardening idempotente sobre conf existente
         sed -i "s/# server_tokens off;/server_tokens off;/" "$nginx_conf" 2>/dev/null || true
         if ! grep -q "X-Frame-Options" "$nginx_conf"; then
             sed -i "/http {/a\\    add_header X-Frame-Options SAMEORIGIN;\n    add_header X-Content-Type-Options nosniff;" "$nginx_conf"
         fi
     fi
 
-    # ── Crear site default directamente con el puerto objetivo ──
+    # Site default con puerto objetivo directo
     local conf="/etc/nginx/sites-available/default"
     cat > "$conf" <<EOF
 server {
@@ -289,30 +325,33 @@ EOF
     generate_index "/var/www/html/index.html" "Nginx" "$ver" "$p"
     create_service_user "www-data" "/var/www/html"
 
-    # ── Validar configuracion mostrando el error real ──
-    local test_output
-    test_output=$(nginx -t 2>&1) || log_error "Configuracion de Nginx invalida:\n$test_output"
+    # Validar antes de arrancar
+    local test_out
+    test_out=$(nginx -t 2>&1) || log_error "Configuracion Nginx invalida:\n$test_out"
 
-    systemctl restart nginx
+    systemctl enable nginx 2>/dev/null || true
+    systemctl restart nginx || log_error "No se pudo iniciar nginx. Revisa: journalctl -xeu nginx.service"
 }
 
+# ------------------------------------------------------------------------------
 install_tomcat() {
     local p=$1
     local ver=$2
     check_port "$p"
     log_info "Instalando Tomcat $ver (Binario)..."
 
-    apt-get update -qq && apt-get install -y -qq default-jdk wget tar
+    apt_install_safe default-jdk wget tar
 
     local major
     major=$(echo "$ver" | cut -d. -f1)
     local url="https://archive.apache.org/dist/tomcat/tomcat-$major/v$ver/bin/apache-tomcat-$ver.tar.gz"
-    local dest="/opt/tomcat$major"
+    local dest="/opt/tomcat${major}"
 
     if [[ ! -d "$dest" ]]; then
         mkdir -p "$dest"
         wget -qO /tmp/tomcat.tar.gz "$url"
         tar -xzf /tmp/tomcat.tar.gz -C "$dest" --strip-components=1
+        rm -f /tmp/tomcat.tar.gz
     fi
 
     sed -i "s/port=\"8080\"/port=\"$p\"/" "$dest/conf/server.xml"
@@ -333,15 +372,18 @@ Environment=CATALINA_PID=$dest/temp/tomcat.pid
 Environment=CATALINA_HOME=$dest
 ExecStart=$dest/bin/startup.sh
 ExecStop=$dest/bin/shutdown.sh
+Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable tomcat${major} --now
+    systemctl enable tomcat${major} --now || \
+        log_error "No se pudo iniciar tomcat${major}. Revisa: journalctl -xeu tomcat${major}.service"
 }
 
+# ------------------------------------------------------------------------------
 purge_services() {
     check_root
     log_warn "Iniciando purga total de servicios HTTP..."
@@ -351,7 +393,9 @@ purge_services() {
     systemctl disable apache2 nginx tomcat* 2>/dev/null || true
 
     log_info "Eliminando paquetes..."
-    apt-get purge -y apache2 apache2-utils nginx nginx-common \
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get purge -y apache2 apache2-utils apache2-bin apache2-data \
+        nginx nginx-common nginx-core \
         tomcat9 tomcat9-common default-jdk 2>/dev/null || true
     apt-get autoremove -y >/dev/null 2>&1 || true
 
@@ -422,19 +466,20 @@ main() {
     check_root
 
     if $list_v; then
-        log_info "Versiones para $service:"
+        log_info "Versiones disponibles para $service:"
         if [[ "$service" == "tomcat" ]]; then
             echo "10.1.34 (Stable)"
-            echo "9.0.98 (LTS)"
+            echo "9.0.98  (LTS)"
         else
             apt-cache madison "${service/apache/apache2}" | awk '{print $3}' | head -n 5
         fi
         exit 0
     fi
 
-    if [[ "$port" -eq 0 ]]; then log_error "Puerto es obligatorio"; fi
+    if [[ "$port" -eq 0 ]]; then log_error "Puerto es obligatorio (--port <num>)"; fi
 
     wait_for_apt_lock
+
     case $service in
         apache) install_apache "$port" "${version:-2.4.58}" ;;
         nginx)  install_nginx  "$port" "${version:-1.24.0}" ;;
@@ -443,7 +488,7 @@ main() {
     esac
 
     configure_firewall "$port"
-    log_success "Despliegue de $service finalizado correctamente."
+    log_success "Despliegue de $service en puerto $port finalizado correctamente."
 }
 
 main "$@"
