@@ -287,7 +287,7 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
         
         $errLog = "$logDir\error.log"
         if (Test-Path $errLog) {
-            Write-LogError "Apache no responde. Ultimas lineas de $errLog:"
+            Write-LogError "Apache no responde. Ultimas lineas de ${errLog}:"
             Get-Content $errLog -Tail 15 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
         } else {
             Write-LogError "Apache fallo al iniciar y no genero error.log. Revisa el Visor de Sucesos (Application log)."
@@ -342,7 +342,7 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
     } else {
         $errLog = "$nginxPath\logs\error.log"
         if (Test-Path $errLog) {
-            Write-LogError "Nginx no responde en $Port. Ultimas lineas de $errLog:"
+            Write-LogError "Nginx no responde en $Port. Ultimas lineas de ${errLog}:"
             Get-Content $errLog -Tail 10 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
         } else {
             Write-LogError "Nginx no responde en $Port y no hay error.log."
