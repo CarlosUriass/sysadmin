@@ -96,111 +96,97 @@ function Set-ServiceUserAndPermissions {
         $acl = Get-Acl $Path
         $acl.SetAccessRuleProtection($true, $true)
 
-        # Quitar solo permisos heredados de Users genericos, NO tocar IUSR ni IIS_IUSRS
         $rules = $acl.Access | Where-Object {
-            $_.IdentityReference -match "BUILTIN\\Users$" -and
-            $_.IsInherited -eq $false
+            $_.IdentityReference -match "BUILTIN\\Users$" -and $_.IsInherited -eq $false
         }
         foreach ($r in $rules) { $acl.RemoveAccessRule($r) | Out-Null }
 
-        # Usuario de servicio dedicado: ReadAndExecute
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $user, "ReadAndExecute",
-            "ContainerInherit,ObjectInherit", "None", "Allow"
-        )
-        $acl.SetAccessRule($rule)
-
-        # IIS: IUSR necesita Read para acceso anonimo
-        $iusr = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "IUSR", "ReadAndExecute",
-            "ContainerInherit,ObjectInherit", "None", "Allow"
-        )
-        $acl.SetAccessRule($iusr)
-
-        # IIS_IUSRS necesita Read para que el worker process acceda
-        $iisUsers = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "IIS_IUSRS", "ReadAndExecute",
-            "ContainerInherit,ObjectInherit", "None", "Allow"
-        )
-        $acl.SetAccessRule($iisUsers)
+        foreach ($identity in @($user, "IUSR", "IIS_IUSRS")) {
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $identity, "ReadAndExecute",
+                "ContainerInherit,ObjectInherit", "None", "Allow"
+            )
+            $acl.SetAccessRule($rule)
+        }
 
         Set-Acl $Path $acl
-        Write-LogInfo "Permisos ACL aplicados en $Path (svc_$ServiceName + IUSR + IIS_IUSRS)"
+        Write-LogInfo "Permisos ACL aplicados en $Path"
     }
+}
+
+# ── FIX: Detener WAS + W3SVC para liberar el handle de applicationHost.config ──
+# W3SVC depende de WAS; deteniendo WAS se liberan todos los handles de IIS
+function Stop-IISServices {
+    Write-LogInfo "Deteniendo WAS y W3SVC para liberar applicationHost.config..."
+    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
+    Stop-Service WAS   -Force -ErrorAction SilentlyContinue
+    # Esperar hasta que ambos esten detenidos (max 15s)
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+        $w3  = (Get-Service W3SVC -ErrorAction SilentlyContinue).Status
+        $was = (Get-Service WAS   -ErrorAction SilentlyContinue).Status
+        if ($w3 -ne 'Running' -and $was -ne 'Running') { break }
+        Start-Sleep -Milliseconds 500
+    }
+    Start-Sleep -Seconds 1   # margen extra para que el SO cierre los handles
+}
+
+function Start-IISServices {
+    Write-LogInfo "Iniciando WAS y W3SVC..."
+    Start-Service WAS   -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    Start-Service W3SVC -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
 }
 
 function Apply-IISHardening ([int]$Port) {
     Write-LogInfo "Aplicando Hardening a IIS..."
     Import-Module WebAdministration -ErrorAction Stop
 
-    $pspath = "MACHINE/WEBROOT/APPHOST"
+    $configPath = "$env:SystemRoot\system32\inetsrv\config\applicationHost.config"
 
-    # ── FIX: Detener W3SVC antes de modificar applicationHost.config ──
-    # El archivo queda bloqueado con handle exclusivo mientras el servicio corre.
-    Write-LogInfo "Deteniendo W3SVC para modificar configuracion..."
-    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    Stop-IISServices
 
-    # -- Cambiar binding del sitio al puerto deseado --
+    # ── Modificar applicationHost.config via XML directo ──
     try {
-        # Modificar directamente el XML de applicationHost.config con .NET
-        # para evitar la restriccion de escritura del provider WebAdministration
-        $configPath = "$env:SystemRoot\system32\inetsrv\config\applicationHost.config"
-        [xml]$config = Get-Content $configPath
+        [xml]$config = Get-Content $configPath -Encoding UTF8
 
-        $sites = $config.configuration.'system.applicationHost'.sites
-        $site  = $sites.site | Where-Object { $_.name -eq "Default Web Site" }
+        # Cambiar binding del Default Web Site
+        $site = $config.configuration.'system.applicationHost'.sites.site |
+                Where-Object { $_.name -eq "Default Web Site" }
 
         if ($site) {
-            # Eliminar todos los bindings y crear uno limpio
             $bindingsNode = $site.bindings
             $bindingsNode.RemoveAll()
             $newBinding = $config.CreateElement("binding")
             $newBinding.SetAttribute("protocol", "http")
             $newBinding.SetAttribute("bindingInformation", "*:${Port}:")
             $bindingsNode.AppendChild($newBinding) | Out-Null
-            $config.Save($configPath)
             Write-LogInfo "Binding IIS configurado en puerto $Port"
         } else {
             Write-LogWarn "Sitio 'Default Web Site' no encontrado en applicationHost.config"
         }
 
-        # -- Hardening en applicationHost.config via XML directo --
-        # removeServerHeader
-        $rf = $config.configuration.'system.webServer'.security.requestFiltering
-        if ($rf) {
-            $rf.SetAttribute("removeServerHeader", "true")
-        }
-
-        # Verbos peligrosos
-        $verbs = $config.configuration.'system.webServer'.security.requestFiltering.verbs
-        if (-not $verbs) {
-            $verbs = $config.CreateElement("verbs")
-            $config.configuration.'system.webServer'.security.requestFiltering.AppendChild($verbs) | Out-Null
-        }
-        foreach ($v in @("TRACE", "TRACK")) {
-            $exists = $verbs.add | Where-Object { $_.verb -eq $v }
-            if (-not $exists) {
-                $vNode = $config.CreateElement("add")
-                $vNode.SetAttribute("verb", $v)
-                $vNode.SetAttribute("allowed", "false")
-                $verbs.AppendChild($vNode) | Out-Null
-            }
-        }
         $config.Save($configPath)
+        Write-LogInfo "applicationHost.config guardado correctamente."
 
     } catch {
-        Write-LogWarn "Error modificando applicationHost.config directamente: $_"
+        Write-LogWarn "No se pudo modificar applicationHost.config: $_"
+        Write-LogInfo "El puerto se configurara via web.config como fallback."
     }
 
-    # -- Headers de seguridad via web.config del sitio (no requiere applicationHost.config) --
+    Start-IISServices
+
+    # ── web.config: headers de seguridad (siempre sobreescribir, nunca acumular) ──
+    # Se sobreescribe completamente para evitar el error 500.19 de duplicate key
     $webConfig = "C:\inetpub\wwwroot\web.config"
-    $webConfigContent = @"
+    $webConfigContent = @'
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
   <system.webServer>
     <httpProtocol>
       <customHeaders>
+        <clear />
         <remove name="X-Powered-By" />
         <add name="X-Frame-Options" value="SAMEORIGIN" />
         <add name="X-Content-Type-Options" value="nosniff" />
@@ -208,7 +194,8 @@ function Apply-IISHardening ([int]$Port) {
     </httpProtocol>
     <security>
       <requestFiltering removeServerHeader="true">
-        <verbs>
+        <verbs allowUnlisted="true">
+          <clear />
           <add verb="TRACE" allowed="false" />
           <add verb="TRACK" allowed="false" />
         </verbs>
@@ -216,14 +203,13 @@ function Apply-IISHardening ([int]$Port) {
     </security>
   </system.webServer>
 </configuration>
-"@
-    [System.IO.File]::WriteAllText($webConfig, $webConfigContent, [System.Text.UTF8Encoding]::new($false))
-    Write-LogInfo "Headers de seguridad aplicados via web.config"
+'@
+    # Crear directorio si no existe (primer deploy)
+    $webDir = Split-Path $webConfig -Parent
+    if (-not (Test-Path $webDir)) { New-Item -ItemType Directory -Path $webDir -Force | Out-Null }
 
-    # -- Reiniciar W3SVC tras los cambios --
-    Write-LogInfo "Reiniciando W3SVC..."
-    Start-Service W3SVC -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
+    [System.IO.File]::WriteAllText($webConfig, $webConfigContent, [System.Text.UTF8Encoding]::new($false))
+    Write-LogInfo "web.config escrito (idempotente, sin duplicados)."
 }
 
 function Set-FirewallRule ([int]$Port, [string]$Svc) {
@@ -282,16 +268,16 @@ function Install-IIS ([int]$Port, [string]$Version) {
         }
     }
 
-    # Arrancar W3SVC inicial para que cree la estructura de directorios
+    # Arranque inicial para que IIS cree su estructura de directorios
+    Start-Service WAS   -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
     Start-Service W3SVC -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 4
 
-    # Aplicar hardening (detiene W3SVC internamente, modifica config, lo reinicia)
+    # Hardening: detiene IIS, modifica config, reinicia IIS
     Apply-IISHardening -Port $Port
 
     Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
-
-    # Permisos: svc_iis + IUSR + IIS_IUSRS (necesarios para acceso anonimo)
     Set-ServiceUserAndPermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
 }
 
@@ -315,36 +301,26 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
 
     $apachePath = Get-ChocoInstallPath -ExeName "httpd.exe" -Candidates $candidates
     if (-not $apachePath) {
-        Write-LogError "No se encontro la instalacion de Apache. Verifica que choco instalo correctamente."
+        Write-LogError "No se encontro la instalacion de Apache."
         return
     }
     Write-LogInfo "Apache encontrado en: $apachePath"
 
     $conf = "$apachePath\conf\httpd.conf"
-    if (-not (Test-Path $conf)) {
-        Write-LogError "httpd.conf no encontrado en $conf"
-        return
-    }
+    if (-not (Test-Path $conf)) { Write-LogError "httpd.conf no encontrado en $conf"; return }
 
     $c = Get-Content $conf -Raw
-    $c = $c -replace '(?m)^Listen\s+80\b',              "Listen $Port"
-    $c = $c -replace '(?m)^#?ServerTokens\s+\w+',       "ServerTokens Prod"
-    $c = $c -replace '(?m)^#?ServerSignature\s+\w+',    "ServerSignature Off"
-    $c = $c -replace '#LoadModule headers_module',       'LoadModule headers_module'
+    $c = $c -replace '(?m)^Listen\s+80\b',           "Listen $Port"
+    $c = $c -replace '(?m)^#?ServerTokens\s+\w+',    "ServerTokens Prod"
+    $c = $c -replace '(?m)^#?ServerSignature\s+\w+', "ServerSignature Off"
+    $c = $c -replace '#LoadModule headers_module',    'LoadModule headers_module'
 
     if ($c -notmatch "X-Frame-Options") {
         $c += "`r`nHeader always set X-Frame-Options SAMEORIGIN"
         $c += "`r`nHeader always set X-Content-Type-Options nosniff"
     }
     if ($c -notmatch "LimitExcept") {
-        $c += @"
-
-<Directory "$apachePath/htdocs">
-    <LimitExcept GET POST>
-        Deny from all
-    </LimitExcept>
-</Directory>
-"@
+        $c += "`r`n<Directory `"$($apachePath -replace '\\','/')/htdocs`">`r`n    <LimitExcept GET POST>`r`n        Deny from all`r`n    </LimitExcept>`r`n</Directory>"
     }
 
     [System.IO.File]::WriteAllText($conf, $c, [System.Text.UTF8Encoding]::new($false))
@@ -352,13 +328,9 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     Set-ServiceUserAndPermissions -ServiceName "apache" -Path "$apachePath\htdocs"
     Generate-IndexHtml -Path "$apachePath\htdocs\index.html" -Svc "Apache" -Ver $Version -Port $Port
 
-    $svcName = "Apache"
-    if (-not (Get-Service $svcName -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Service "Apache*" -ErrorAction SilentlyContinue)) {
         $httpd = "$apachePath\bin\httpd.exe"
-        if (Test-Path $httpd) {
-            & $httpd -k install 2>&1 | Out-Null
-            Write-LogInfo "Servicio Apache registrado."
-        }
+        if (Test-Path $httpd) { & $httpd -k install 2>&1 | Out-Null; Write-LogInfo "Servicio Apache registrado." }
     }
     Restart-Service "Apache*" -Force -ErrorAction SilentlyContinue
 }
@@ -376,21 +348,15 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
         "$env:ALLUSERSPROFILE\chocolatey\lib\nginx\tools\nginx"
     )
     $nginxPath = Get-ChocoInstallPath -ExeName "nginx.exe" -Candidates $candidates
-    if (-not $nginxPath) {
-        Write-LogError "No se encontro la instalacion de Nginx."
-        return
-    }
+    if (-not $nginxPath) { Write-LogError "No se encontro la instalacion de Nginx."; return }
     Write-LogInfo "Nginx encontrado en: $nginxPath"
 
     $conf = "$nginxPath\conf\nginx.conf"
-    if (-not (Test-Path $conf)) {
-        Write-LogError "nginx.conf no encontrado en $conf"
-        return
-    }
+    if (-not (Test-Path $conf)) { Write-LogError "nginx.conf no encontrado en $conf"; return }
 
     $c = Get-Content $conf -Raw
-    $c = $c -replace 'listen\s+80;',         "listen $Port;"
-    $c = $c -replace 'listen\s+\[::\]:80;',  "listen [::]:$Port;"
+    $c = $c -replace 'listen\s+80;',              "listen $Port;"
+    $c = $c -replace 'listen\s+\[::\]:80;',       "listen [::]:$Port;"
     $c = $c -replace '#?\s*server_tokens\s+\w+;', "server_tokens off;"
 
     if ($c -notmatch "X-Frame-Options") {
@@ -446,18 +412,18 @@ function Install-WebServer ([string]$Service, [int]$Port, [string]$Version) {
 
 function Show-Status {
     Write-Host "`n--- ESTADO DE SERVICIOS (WINDOWS) ---" -ForegroundColor White
-    Get-Service -Name W3SVC, Apache*, nginx -ErrorAction SilentlyContinue |
+    Get-Service -Name W3SVC, WAS, Apache*, nginx -ErrorAction SilentlyContinue |
         Select-Object Name, Status | Format-Table -AutoSize
     Write-Host "`n--- PUERTOS HTTP ACTIVOS ---" -ForegroundColor White
     Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
         Where-Object { $_.LocalPort -in (80, 443, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 3010) } |
-        Select-Object LocalAddress, LocalPort, OwningProcess |
-        Format-Table -AutoSize
+        Select-Object LocalAddress, LocalPort, OwningProcess | Format-Table -AutoSize
 }
 
 function Invoke-Purge {
     Write-LogWarn "Iniciando purga total de servicios HTTP..."
-    Stop-Service W3SVC, Apache*, nginx -Force -ErrorAction SilentlyContinue
+    Stop-IISServices
+    Stop-Service Apache*, nginx -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     sc.exe delete nginx  2>$null | Out-Null
     sc.exe delete Apache 2>$null | Out-Null
@@ -470,9 +436,7 @@ function Invoke-Purge {
             -NoRestart -ErrorAction SilentlyContinue | Out-Null
     } catch {}
 
-    Get-NetFirewallRule -DisplayName "HTTP-Allow-*" -ErrorAction SilentlyContinue |
-        Remove-NetFirewallRule
-
+    Get-NetFirewallRule -DisplayName "HTTP-Allow-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     Write-LogSuccess "Purga completada."
 }
 
@@ -498,15 +462,11 @@ function Request-ValidPort {
 function Select-Version ([string]$Service) {
     $v = Get-DynamicVersions -Service $Service
     Write-Host "Seleccione version:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt [Math]::Min($v.Count, 5); $i++) {
-        Write-Host "  $($i+1)) $($v[$i])"
-    }
+    for ($i = 0; $i -lt [Math]::Min($v.Count, 5); $i++) { Write-Host "  $($i+1)) $($v[$i])" }
     Write-Host "  (Enter para la mas reciente)" -ForegroundColor Gray
     $sel = Read-Host "Opcion"
     $idx = 0
-    if ([int]::TryParse($sel, [ref]$idx) -and $idx -ge 1 -and $idx -le $v.Count) {
-        return $v[$idx - 1]
-    }
+    if ([int]::TryParse($sel, [ref]$idx) -and $idx -ge 1 -and $idx -le $v.Count) { return $v[$idx - 1] }
     return $v[0]
 }
 
@@ -515,7 +475,6 @@ function Main {
         Write-Host @"
 Uso: .\http_deploy.ps1 [-Service iis|apache|nginx] [-Port <num>]
                        [-ServiceVersion <ver>] [-ListVersions] [-Status] [-Purge]
-
 Ejemplos:
   .\http_deploy.ps1 -Service nginx  -Port 3001
   .\http_deploy.ps1 -Service apache -Port 3002 -ServiceVersion 2.4.55
@@ -541,32 +500,14 @@ Ejemplos:
         return
     }
 
-    # Modo interactivo
     while ($true) {
         Write-Host "`n=== SISTEMA DE APROVISIONAMIENTO HTTP (Practica 6) ===" -ForegroundColor Cyan
-        Write-Host "  1) IIS"
-        Write-Host "  2) Apache"
-        Write-Host "  3) Nginx"
-        Write-Host "  4) Estado"
-        Write-Host "  5) Purgar"
-        Write-Host "  q) Salir"
+        Write-Host "  1) IIS`n  2) Apache`n  3) Nginx`n  4) Estado`n  5) Purgar`n  q) Salir"
         $choice = Read-Host "Seleccione"
-
         switch ($choice.ToLower()) {
-            "1" {
-                $p = Request-ValidPort
-                Install-WebServer -Service "iis" -Port $p -Version "10.0"
-            }
-            "2" {
-                $ver = Select-Version -Service "apache"
-                $p   = Request-ValidPort
-                Install-WebServer -Service "apache" -Port $p -Version $ver
-            }
-            "3" {
-                $ver = Select-Version -Service "nginx"
-                $p   = Request-ValidPort
-                Install-WebServer -Service "nginx" -Port $p -Version $ver
-            }
+            "1" { $p = Request-ValidPort; Install-WebServer -Service "iis"    -Port $p -Version "10.0" }
+            "2" { $ver = Select-Version "apache"; $p = Request-ValidPort; Install-WebServer -Service "apache" -Port $p -Version $ver }
+            "3" { $ver = Select-Version "nginx";  $p = Request-ValidPort; Install-WebServer -Service "nginx"  -Port $p -Version $ver }
             "4" { Show-Status }
             "5" { Invoke-Purge }
             "q" { Write-Host "Saliendo..."; return }
