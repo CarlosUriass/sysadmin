@@ -50,6 +50,18 @@ function Test-PortInUse {
     return ([bool]$tcp -or [bool]$udp)
 }
 
+function Get-NearbyAvailablePorts {
+    param([int]$Port)
+    $suggestions = @()
+    for ($i = $Port + 1; $i -le $Port + 20 -and $i -le 65535; $i++) {
+        if (-not (Test-PortInUse -Port $i)) {
+            $suggestions += $i
+            if ($suggestions.Count -ge 3) { break }
+        }
+    }
+    return $suggestions
+}
+
 # ==============================================================================
 # DYNAMIC VERSIONING
 # ==============================================================================
@@ -166,7 +178,11 @@ function Install-WebServer {
     # Limpiar puerto si esta ocupado (Lanzar excepcion segun requerimiento)
     if (Test-PortInUse -Port $Port) {
         $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
+        $suggestions = Get-NearbyAvailablePorts -Port $Port
         $msg = "Error: El puerto $Port ya esta en uso por PID: $($conn.OwningProcess -join ', ')."
+        if ($suggestions.Count -gt 0) {
+            $msg += " Puertos cercanos disponibles: $($suggestions -join ', ')"
+        }
         Write-LogError $msg
         throw $msg
     }

@@ -85,7 +85,19 @@ list_available_versions() {
 check_port() {
     local p=$1
     if lsof -Pi :"$p" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        log_error "El puerto $p ya está en uso. No se puede continuar."
+        local suggestions=()
+        for ((i=p+1; i<=p+20 && i<=65535; i++)); do
+            if ! lsof -Pi :"$i" -sTCP:LISTEN -t >/dev/null 2>&1; then
+                suggestions+=("$i")
+            fi
+            [[ ${#suggestions[@]} -ge 3 ]] && break
+        done
+        
+        local msg="El puerto $p ya está en uso."
+        if [[ ${#suggestions[@]} -gt 0 ]]; then
+            msg="$msg Puertos cercanos disponibles: ${suggestions[*]}"
+        fi
+        log_error "$msg"
     fi
 }
 
