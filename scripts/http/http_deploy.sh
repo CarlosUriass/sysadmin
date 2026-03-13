@@ -31,7 +31,7 @@ show_help() {
     echo "Uso: $0 [OPCIONES]"
     echo ""
     echo "Opciones:"
-    echo "  --service <srv>       Servicio a instalar (apache, nginx)"
+    echo "  --service <srv>       Servicio a instalar (apache, nginx, tomcat)"
     echo "  --port <num>          Puerto de escucha"
     echo "  --version <ver>       Versión específica a instalar"
     echo "  --list-versions       Listar versiones disponibles para el servicio"
@@ -75,6 +75,10 @@ list_available_versions() {
             apt-get update -qq
             apt-cache madison nginx | awk '{print $3}' | head -n 5
             ;;
+        tomcat)
+            apt-get update -qq
+            apt-cache madison tomcat9 | awk '{print $3}' | head -n 5
+            ;;
         *)
             log_error "Servicio no soportado para listado: $srv"
             ;;
@@ -113,6 +117,7 @@ install_web_server() {
     
     local pkg_name=$srv
     if [[ "$srv" == "apache" ]]; then pkg_name="apache2"; fi
+    if [[ "$srv" == "tomcat" ]]; then pkg_name="tomcat9"; fi
 
     if [[ -n "$ver" ]]; then
         apt-get update -qq
@@ -130,6 +135,15 @@ install_web_server() {
         sed -i "s/listen 80 default_server;/listen $p default_server;/" /etc/nginx/sites-available/default
         sed -i "s/listen \[::\]:80 default_server;/listen [::]:$p default_server;/" /etc/nginx/sites-available/default
         systemctl restart nginx
+    elif [[ "$srv" == "tomcat" ]]; then
+        local server_xml="/etc/tomcat9/server.xml"
+        if [[ -f "$server_xml" ]]; then
+            # Cambiar puerto de Connector de 8080 al puerto deseado
+            sed -i "s/port=\"8080\"/port=\"$p\"/" "$server_xml"
+            systemctl restart tomcat9
+        else
+            log_warn "No se encontró $server_xml para configurar el puerto."
+        fi
     fi
 
     log_success "$srv instalado y configurado en puerto $p."
@@ -138,14 +152,14 @@ install_web_server() {
 # --- Main Logic ---
 if $STATUS; then
     echo "=== Estado de Servicios ==="
-    systemctl status apache2 nginx --no-pager 2>/dev/null || true
+    systemctl status apache2 nginx tomcat9 --no-pager 2>/dev/null || true
     exit 0
 fi
 
 if $PURGE; then
     check_root
     log_warn "Purgando servicios..."
-    apt-get purge -y apache2 nginx >/dev/null 2>&1 || true
+    apt-get purge -y apache2 nginx tomcat9 >/dev/null 2>&1 || true
     apt-get autoremove -y >/dev/null 2>&1 || true
     log_success "Sistema limpio."
     exit 0

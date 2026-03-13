@@ -37,7 +37,16 @@ for pkg in "${PACKAGES[@]}"; do
     else
         echo "info: instalando $pkg ..."
         apt-get update -qq
-        apt-get install -y -qq "$pkg"
-        echo "ok: $pkg instalado"
+        if apt-get install -y -qq "$pkg"; then
+            if dpkg -s "$pkg" &>/dev/null; then
+                echo "ok: $pkg instalado"
+            else
+                echo "FAIL: $pkg no se pudo verificar tras la instalacion"
+                exit 1
+            fi
+        else
+            echo "FAIL: error al instalar $pkg"
+            exit 1
+        fi
     fi
 done
