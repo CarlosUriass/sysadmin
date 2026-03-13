@@ -55,10 +55,61 @@ function Ensure-Chocolatey {
     }
 }
 
-function Get-ChocoInstallPath ([string]$ExeName, [string[]]$Candidates) {
-    foreach ($c in $Candidates) { if (Test-Path $c) { return $c } }
-    $found = Get-Command $ExeName -ErrorAction SilentlyContinue
-    if ($found) { return Split-Path $found.Source -Parent }
+# ── FIX: Busca la ruta de Apache verificando que contenga bin\httpd.exe ──
+# Antes buscaba el primer subdirectorio de choco (alphabeticamente 'legal'),
+# ahora recorre todos los subdirectorios y valida que sea una instalacion real.
+function Find-ApachePath {
+    # 1. Rutas fijas conocidas
+    $fixed = @(
+        "C:\tools\apache24",
+        "C:\Apache24",
+        "C:\Program Files\Apache Software Foundation\Apache2.4",
+        "$env:SystemDrive\tools\Apache24"
+    )
+    foreach ($p in $fixed) {
+        if (Test-Path "$p\bin\httpd.exe") { return $p }
+    }
+
+    # 2. Buscar dentro del directorio de choco lib buscando bin\httpd.exe
+    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\apache-httpd"
+    if (Test-Path $chocoLib) {
+        # Buscar recursivamente httpd.exe y subir dos niveles (tools\apache24\bin\httpd.exe)
+        $found = Get-ChildItem -Path $chocoLib -Recurse -Filter "httpd.exe" -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+        if ($found) {
+            # httpd.exe esta en <path>\bin\httpd.exe -> devolver <path>
+            return Split-Path $found.DirectoryName -Parent
+        }
+    }
+
+    # 3. Buscar httpd.exe en PATH
+    $inPath = Get-Command "httpd.exe" -ErrorAction SilentlyContinue
+    if ($inPath) { return Split-Path (Split-Path $inPath.Source -Parent) -Parent }
+
+    return $null
+}
+
+# ── FIX: Busca la ruta de Nginx verificando que contenga nginx.exe ──
+function Find-NginxPath {
+    $fixed = @(
+        "C:\tools\nginx",
+        "C:\nginx",
+        "$env:SystemDrive\tools\nginx"
+    )
+    foreach ($p in $fixed) {
+        if (Test-Path "$p\nginx.exe") { return $p }
+    }
+
+    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\nginx"
+    if (Test-Path $chocoLib) {
+        $found = Get-ChildItem -Path $chocoLib -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+        if ($found) { return $found.DirectoryName }
+    }
+
+    $inPath = Get-Command "nginx.exe" -ErrorAction SilentlyContinue
+    if ($inPath) { return Split-Path $inPath.Source -Parent }
+
     return $null
 }
 
@@ -102,11 +153,15 @@ function Set-ServiceUserAndPermissions {
         foreach ($r in $rules) { $acl.RemoveAccessRule($r) | Out-Null }
 
         foreach ($identity in @($user, "IUSR", "IIS_IUSRS")) {
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $identity, "ReadAndExecute",
-                "ContainerInherit,ObjectInherit", "None", "Allow"
-            )
-            $acl.SetAccessRule($rule)
+            try {
+                $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    $identity, "ReadAndExecute",
+                    "ContainerInherit,ObjectInherit", "None", "Allow"
+                )
+                $acl.SetAccessRule($rule)
+            } catch {
+                Write-LogWarn "No se pudo aplicar ACL para $identity : $_"
+            }
         }
 
         Set-Acl $Path $acl
@@ -114,13 +169,10 @@ function Set-ServiceUserAndPermissions {
     }
 }
 
-# ── FIX: Detener WAS + W3SVC para liberar el handle de applicationHost.config ──
-# W3SVC depende de WAS; deteniendo WAS se liberan todos los handles de IIS
 function Stop-IISServices {
     Write-LogInfo "Deteniendo WAS y W3SVC para liberar applicationHost.config..."
     Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
     Stop-Service WAS   -Force -ErrorAction SilentlyContinue
-    # Esperar hasta que ambos esten detenidos (max 15s)
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline) {
         $w3  = (Get-Service W3SVC -ErrorAction SilentlyContinue).Status
@@ -128,7 +180,7 @@ function Stop-IISServices {
         if ($w3 -ne 'Running' -and $was -ne 'Running') { break }
         Start-Sleep -Milliseconds 500
     }
-    Start-Sleep -Seconds 1   # margen extra para que el SO cierre los handles
+    Start-Sleep -Seconds 1
 }
 
 function Start-IISServices {
@@ -147,11 +199,9 @@ function Apply-IISHardening ([int]$Port) {
 
     Stop-IISServices
 
-    # ── Modificar applicationHost.config via XML directo ──
     try {
         [xml]$config = Get-Content $configPath -Encoding UTF8
 
-        # Cambiar binding del Default Web Site
         $site = $config.configuration.'system.applicationHost'.sites.site |
                 Where-Object { $_.name -eq "Default Web Site" }
 
@@ -169,17 +219,17 @@ function Apply-IISHardening ([int]$Port) {
 
         $config.Save($configPath)
         Write-LogInfo "applicationHost.config guardado correctamente."
-
     } catch {
         Write-LogWarn "No se pudo modificar applicationHost.config: $_"
-        Write-LogInfo "El puerto se configurara via web.config como fallback."
     }
 
     Start-IISServices
 
-    # ── web.config: headers de seguridad (siempre sobreescribir, nunca acumular) ──
-    # Se sobreescribe completamente para evitar el error 500.19 de duplicate key
+    # web.config: siempre sobreescribir completamente (evita duplicate key en reruns)
     $webConfig = "C:\inetpub\wwwroot\web.config"
+    $webDir = Split-Path $webConfig -Parent
+    if (-not (Test-Path $webDir)) { New-Item -ItemType Directory -Path $webDir -Force | Out-Null }
+
     $webConfigContent = @'
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
@@ -204,12 +254,8 @@ function Apply-IISHardening ([int]$Port) {
   </system.webServer>
 </configuration>
 '@
-    # Crear directorio si no existe (primer deploy)
-    $webDir = Split-Path $webConfig -Parent
-    if (-not (Test-Path $webDir)) { New-Item -ItemType Directory -Path $webDir -Force | Out-Null }
-
     [System.IO.File]::WriteAllText($webConfig, $webConfigContent, [System.Text.UTF8Encoding]::new($false))
-    Write-LogInfo "web.config escrito (idempotente, sin duplicados)."
+    Write-LogInfo "web.config escrito (idempotente)."
 }
 
 function Set-FirewallRule ([int]$Port, [string]$Svc) {
@@ -268,13 +314,11 @@ function Install-IIS ([int]$Port, [string]$Version) {
         }
     }
 
-    # Arranque inicial para que IIS cree su estructura de directorios
     Start-Service WAS   -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     Start-Service W3SVC -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 4
 
-    # Hardening: detiene IIS, modifica config, reinicia IIS
     Apply-IISHardening -Port $Port
 
     Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
@@ -287,27 +331,20 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     Write-LogInfo "Instalando Apache $Version via Chocolatey..."
     choco install apache-httpd --version=$Version -y --no-progress 2>&1 | Out-Null
 
-    $candidates = @(
-        "C:\tools\apache24",
-        "C:\Apache24",
-        "C:\Program Files\Apache Software Foundation\Apache2.4",
-        "$env:SystemDrive\tools\Apache24"
-    )
-    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\apache-httpd"
-    if (Test-Path $chocoLib) {
-        $subdir = Get-ChildItem $chocoLib -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($subdir) { $candidates = @($subdir.FullName) + $candidates }
-    }
-
-    $apachePath = Get-ChocoInstallPath -ExeName "httpd.exe" -Candidates $candidates
+    # ── FIX: usar Find-ApachePath que valida bin\httpd.exe en lugar de
+    #    Get-ChildItem que devuelvia 'legal' como primer subdirectorio ──
+    $apachePath = Find-ApachePath
     if (-not $apachePath) {
-        Write-LogError "No se encontro la instalacion de Apache."
+        Write-LogError "No se encontro la instalacion de Apache (bin\httpd.exe no localizado)."
         return
     }
     Write-LogInfo "Apache encontrado en: $apachePath"
 
     $conf = "$apachePath\conf\httpd.conf"
-    if (-not (Test-Path $conf)) { Write-LogError "httpd.conf no encontrado en $conf"; return }
+    if (-not (Test-Path $conf)) {
+        Write-LogError "httpd.conf no encontrado en $conf"
+        return
+    }
 
     $c = Get-Content $conf -Raw
     $c = $c -replace '(?m)^Listen\s+80\b',           "Listen $Port"
@@ -320,7 +357,8 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
         $c += "`r`nHeader always set X-Content-Type-Options nosniff"
     }
     if ($c -notmatch "LimitExcept") {
-        $c += "`r`n<Directory `"$($apachePath -replace '\\','/')/htdocs`">`r`n    <LimitExcept GET POST>`r`n        Deny from all`r`n    </LimitExcept>`r`n</Directory>"
+        $forwardSlash = $apachePath -replace '\\', '/'
+        $c += "`r`n<Directory `"$forwardSlash/htdocs`">`r`n    <LimitExcept GET POST>`r`n        Deny from all`r`n    </LimitExcept>`r`n</Directory>"
     }
 
     [System.IO.File]::WriteAllText($conf, $c, [System.Text.UTF8Encoding]::new($false))
@@ -330,7 +368,10 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
 
     if (-not (Get-Service "Apache*" -ErrorAction SilentlyContinue)) {
         $httpd = "$apachePath\bin\httpd.exe"
-        if (Test-Path $httpd) { & $httpd -k install 2>&1 | Out-Null; Write-LogInfo "Servicio Apache registrado." }
+        if (Test-Path $httpd) {
+            & $httpd -k install 2>&1 | Out-Null
+            Write-LogInfo "Servicio Apache registrado."
+        }
     }
     Restart-Service "Apache*" -Force -ErrorAction SilentlyContinue
 }
@@ -341,18 +382,19 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
     Write-LogInfo "Instalando Nginx $Version via Chocolatey..."
     choco install nginx --version=$Version -y --no-progress 2>&1 | Out-Null
 
-    $candidates = @(
-        "C:\tools\nginx",
-        "C:\nginx",
-        "$env:SystemDrive\tools\nginx",
-        "$env:ALLUSERSPROFILE\chocolatey\lib\nginx\tools\nginx"
-    )
-    $nginxPath = Get-ChocoInstallPath -ExeName "nginx.exe" -Candidates $candidates
-    if (-not $nginxPath) { Write-LogError "No se encontro la instalacion de Nginx."; return }
+    # ── FIX: usar Find-NginxPath que valida nginx.exe ──
+    $nginxPath = Find-NginxPath
+    if (-not $nginxPath) {
+        Write-LogError "No se encontro la instalacion de Nginx (nginx.exe no localizado)."
+        return
+    }
     Write-LogInfo "Nginx encontrado en: $nginxPath"
 
     $conf = "$nginxPath\conf\nginx.conf"
-    if (-not (Test-Path $conf)) { Write-LogError "nginx.conf no encontrado en $conf"; return }
+    if (-not (Test-Path $conf)) {
+        Write-LogError "nginx.conf no encontrado en $conf"
+        return
+    }
 
     $c = Get-Content $conf -Raw
     $c = $c -replace 'listen\s+80;',              "listen $Port;"
