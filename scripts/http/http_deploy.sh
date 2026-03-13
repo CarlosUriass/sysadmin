@@ -98,23 +98,40 @@ install_apache() {
     fi
     
     rm -f /usr/sbin/policy-rc.d
+
+    # Validar existencia de archivos de configuracion
+    if [[ ! -f "/etc/apache2/ports.conf" ]]; then
+        log_warn "ports.conf no encontrado. Intentando recuperar configuracion base..."
+        apt-get install -y -qq --reinstall apache2-common
+    fi
+
+    if [[ ! -f "/etc/apache2/ports.conf" ]]; then
+        log_error "No se pudo recuperar la configuracion de Apache. Abortando."
+    fi
     
     # Hardening
     sed -i "s/Listen 80/Listen $p/" /etc/apache2/ports.conf
-    sed -i "s/ServerTokens .*/ServerTokens Prod/" /etc/apache2/conf-available/security.conf
-    sed -i "s/ServerSignature .*/ServerSignature Off/" /etc/apache2/conf-available/security.conf
+    # Asegurar que security.conf existe
+    if [[ -f "/etc/apache2/conf-available/security.conf" ]]; then
+        sed -i "s/ServerTokens .*/ServerTokens Prod/" /etc/apache2/conf-available/security.conf
+        sed -i "s/ServerSignature .*/ServerSignature Off/" /etc/apache2/conf-available/security.conf
+        a2enconf security >/dev/null 2>&1 || true
+    fi
     
     # Encabezados de Seguridad
-    a2enmod headers >/dev/null
-    echo "Header set X-Frame-Options: SAMEORIGIN" >> /etc/apache2/apache2.conf
-    echo "Header set X-Content-Type-Options: nosniff" >> /etc/apache2/apache2.conf
+    a2enmod headers >/dev/null 2>&1 || true
+    # Evitar duplicados si el script se corre varias veces
+    grep -q "X-Frame-Options" /etc/apache2/apache2.conf || echo "Header set X-Frame-Options: SAMEORIGIN" >> /etc/apache2/apache2.conf
+    grep -q "X-Content-Type-Options" /etc/apache2/apache2.conf || echo "Header set X-Content-Type-Options: nosniff" >> /etc/apache2/apache2.conf
     
     # Restringir metodos
-    echo "<Directory /var/www/html/>
+    if ! grep -q "<LimitExcept GET POST>" /etc/apache2/apache2.conf; then
+        echo "<Directory /var/www/html/>
     <LimitExcept GET POST>
         Deny from all
     </LimitExcept>
 </Directory>" >> /etc/apache2/apache2.conf
+    fi
 
     generate_index "/var/www/html/index.html" "Apache" "$ver" "$p"
     create_service_user "www-data" "/var/www/html"
