@@ -89,10 +89,13 @@ install_apache() {
     echo "exit 101" > /usr/sbin/policy-rc.d
     chmod +x /usr/sbin/policy-rc.d
     
-    apt-get update -qq && apt-get install -y -qq apache2 || {
-        log_warn "Error en instalacion inicial, intentando corregir..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    if ! apt-get install -y -qq apache2; then
+        log_warn "Instalacion interrumpida, intentando reparar y reinstalar..."
         apt-get install -f -y -qq
-    }
+        apt-get install -y -qq --reinstall apache2
+    fi
     
     rm -f /usr/sbin/policy-rc.d
     
@@ -128,14 +131,33 @@ install_nginx() {
     echo "exit 101" > /usr/sbin/policy-rc.d
     chmod +x /usr/sbin/policy-rc.d
 
-    apt-get update -qq && apt-get install -y -qq nginx || {
-        log_warn "Error en instalacion inicial, intentando corregir..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    if ! apt-get install -y -qq nginx; then
+        log_warn "Instalacion interrumpida, intentando reparar y reinstalar..."
         apt-get install -f -y -qq
-    }
+        apt-get install -y -qq --reinstall nginx
+    fi
     
     rm -f /usr/sbin/policy-rc.d
 
     local conf="/etc/nginx/sites-available/default"
+    if [[ ! -f "$conf" ]]; then
+        log_warn "Archivo $conf no encontrado. Intentando crear configuración básica..."
+        mkdir -p /etc/nginx/sites-available
+        echo "server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    root /var/www/html;
+    index index.html index.htm;
+    server_name _;
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}" > "$conf"
+        ln -sf "$conf" /etc/nginx/sites-enabled/default 2>/dev/null || true
+    fi
+
     sed -i "s/listen 80 default_server;/listen $p default_server;/" "$conf"
     sed -i "s/listen \[::\]:80 default_server;/listen [::]:$p default_server;/" "$conf"
     
