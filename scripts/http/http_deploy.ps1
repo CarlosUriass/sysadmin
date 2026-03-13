@@ -255,12 +255,12 @@ function Main {
 
     if ($Service -ne "") {
         if ($ListVersions) {
-            Write-LogInfo "Versiones para $Service:"
+            Write-LogInfo "Versiones para ${Service}:"
             Get-DynamicVersions -Service $Service | ForEach-Object { Write-Host " - $_" }
             return
         }
         if ($Port -eq 0) { Write-LogError "Puerto requerido."; return }
-        $Ver = if ($ServiceVersion) { $ServiceVersion } else { Get-DynamicVersions -Service $Service | Select -First 1 }
+        if ($ServiceVersion) { $Ver = $ServiceVersion } else { $Ver = Get-DynamicVersions -Service $Service | Select -First 1 }
         try { Install-WebServer -Service $Service -Port $Port -Version $Ver } catch { Write-LogError $_.Exception.Message }
         return
     }
@@ -277,14 +277,14 @@ function Main {
                 $v = Get-DynamicVersions -Service "apache"
                 Write-Host "Seleccione version: `n1) $($v[0])`n2) $($v[1])"
                 $vs = Read-Host
-                $ver = if ($vs -eq "2") { $v[1] } else { $v[0] }
+                if ($vs -eq "2") { $ver = $v[1] } else { $ver = $v[0] }
                 Install-WebServer -Service "apache" -Port (Request-ValidPort) -Version $ver
             }
             "3" {
                 $v = Get-DynamicVersions -Service "nginx"
                 Write-Host "Seleccione version: `n1) $($v[0])`n2) $($v[1])"
                 $vs = Read-Host
-                $ver = if ($vs -eq "2") { $v[1] } else { $v[0] }
+                if ($vs -eq "2") { $ver = $v[1] } else { $ver = $v[0] }
                 Install-WebServer -Service "nginx" -Port (Request-ValidPort) -Version $ver
             }
             "4" { Show-Status }
