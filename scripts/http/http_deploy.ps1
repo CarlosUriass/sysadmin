@@ -27,6 +27,22 @@ function Get-NearbyAvailablePorts ([int]$Port) {
     }
     return $s
 }
+
+function Remove-ConflictingService ([string]$ServiceName, [string]$ExpectedRoot) {
+    $svc = Get-WmiObject win32_service | Where-Object { $_.Name -match "^$ServiceName" }
+    if ($svc) {
+        $path = $svc.PathName.ToLower()
+        $expected = $ExpectedRoot.ToLower()
+        # Si la ruta no contiene nuestro root esperado, es un servicio "fantasma" o de otra instalacion
+        if ($path -notmatch [regex]::Escape($expected)) {
+            Write-LogWarn "Detectado servicio conflictivo '$($svc.Name)' en ruta: $($svc.PathName)"
+            Write-LogInfo "Eliminando servicio conflictivo para permitir nueva instalacion..."
+            Stop-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
+            sc.exe delete $svc.Name | Out-Null
+            Start-Sleep -Seconds 2
+        }
+    }
+}
 function Ensure-Chocolatey {
     if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
         Write-LogWarn "Instalando Chocolatey..."
@@ -204,6 +220,9 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     choco install apache-httpd --version=$Version -y --no-progress --force
     $apachePath = Ensure-ApacheExtracted
     if (-not $apachePath) { return $false }
+
+    # Limpieza de servicios fantasma (ej: AppData\Roaming)
+    Remove-ConflictingService -ServiceName "Apache" -ExpectedRoot $apachePath
     $conf = "$apachePath\conf\httpd.conf"
     if (-not (Test-Path $conf)) { Write-LogError "httpd.conf no encontrado en $conf"; return $false }
     Write-LogInfo "Configurando $conf ..."
@@ -304,6 +323,9 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
     choco install nginx --version=$Version -y --no-progress --force
     $nginxPath = Ensure-NginxExtracted
     if (-not $nginxPath) { return $false }
+
+    # Limpieza de servicios fantasma
+    Remove-ConflictingService -ServiceName "nginx" -ExpectedRoot $nginxPath
     $conf = "$nginxPath\conf\nginx.conf"
     if (-not (Test-Path $conf)) { Write-LogError "nginx.conf no encontrado en $conf"; return $false }
     Write-LogInfo "Configurando $conf ..."
