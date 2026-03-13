@@ -249,22 +249,50 @@ function Install-ApacheHTTP ([int]$Port, [string]$Version) {
     Set-ServiceUserAndPermissions -ServiceName "apache" -Path "$apachePath\htdocs"
     Generate-IndexHtml -Path "$apachePath\htdocs\index.html" -Svc "Apache" -Ver $Version -Port $Port
 
+    # Asegurar directorio de logs
+    $logDir = "$apachePath\logs"
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+
     $httpd = "$apachePath\bin\httpd.exe"
-    if (-not (Get-Service "Apache*" -ErrorAction SilentlyContinue)) {
+    $svcName = "Apache2.4"
+    $svc = Get-Service -Name "Apache*" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($svc) { $svcName = $svc.Name }
+
+    if (-not $svc) {
         Write-LogInfo "Registrando servicio Apache..."
-        & $httpd -k install 2>&1 | Out-Null
+        # El comando install por defecto usa el nombre Apache2.4
+        $out = & $httpd -k install -n "Apache2.4" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-LogWarn "Fallo al registrar servicio via httpd -k install: $out"
+            # Intento manual via New-Service como fallback
+            New-Service -Name "Apache2.4" -BinaryPathName "`"$httpd`" -k runservice" -DisplayName "Apache2.4" -StartupType Automatic -ErrorAction SilentlyContinue | Out-Null
+        }
+        $svcName = "Apache2.4"
     }
-    Write-LogInfo "Iniciando Apache..."
-    & $httpd -k restart 2>&1 | Out-Null
-    Start-Sleep 2
-    if (Test-PortInUse -Port $Port) { Write-LogSuccess "Apache escuchando en puerto $Port" }
-    else {
-        $errLog = "$apachePath\logs\error.log"
+
+    Write-LogInfo "Iniciando servicio $svcName ..."
+    $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+    if ($svc.Status -ne 'Running') {
+        Start-Service -Name $svcName -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+    }
+
+    if ($svc.Status -eq 'Running' -and (Test-PortInUse -Port $Port)) {
+        Write-LogSuccess "Apache ($svcName) en ejecucion y escuchando en puerto $Port"
+    } else {
+        Write-LogWarn "El servicio no responde en el puerto $Port. Intentando diagnostico directo..."
+        # Ejecutar httpd directamente por 1 segundo para capturar error en consola si hay fallo silencioso de servicio
+        $diag = Start-Process -FilePath $httpd -ArgumentList "-t" -NoNewWindow -PassThru -Wait -ErrorAction SilentlyContinue
+        
+        $errLog = "$logDir\error.log"
         if (Test-Path $errLog) {
-            Write-LogError "Apache no responde. Ultimas lineas de error.log:"
-            Get-Content $errLog -Tail 10 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            Write-LogError "Apache no responde. Ultimas lineas de $errLog:"
+            Get-Content $errLog -Tail 15 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
         } else {
-            Write-LogWarn "Apache no responde en $Port y no hay error.log - posible fallo al registrar servicio."
+            Write-LogError "Apache fallo al iniciar y no genero error.log. Revisa el Visor de Sucesos (Application log)."
+            # Intentar ver si hay algun error de sintaxis que el flag -t inicial no capturo (raro)
+            & $httpd -t
         }
     }
     return $true
@@ -300,22 +328,27 @@ function Install-NginxHTTP ([int]$Port, [string]$Version) {
         }
     }
     Write-LogInfo "Iniciando Nginx..."
+    # Nginx necesita ejecutarse desde su propio directorio
     Push-Location $nginxPath
-    Start-Process -FilePath $nginxExe -ArgumentList "-s","stop" -NoNewWindow -Wait -ErrorAction SilentlyContinue
+    # Intentar detener procesos huerfanos
+    Stop-Process -Name nginx -Force -ErrorAction SilentlyContinue
     Start-Process -FilePath $nginxExe -NoNewWindow
     Pop-Location
-    Start-Sleep 2
-    if (Test-PortInUse -Port $Port) { Write-LogSuccess "Nginx escuchando en puerto $Port" }
-    else {
+    Start-Sleep -Seconds 2
+
+    if (Test-PortInUse -Port $Port) {
+        Write-LogSuccess "Nginx escuchando en puerto $Port"
+        return $true
+    } else {
         $errLog = "$nginxPath\logs\error.log"
         if (Test-Path $errLog) {
-            Write-LogError "Nginx no responde. Ultimas lineas de error.log:"
+            Write-LogError "Nginx no responde en $Port. Ultimas lineas de $errLog:"
             Get-Content $errLog -Tail 10 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
         } else {
-            Write-LogWarn "Nginx no responde en $Port y no hay error.log."
+            Write-LogError "Nginx no responde en $Port y no hay error.log."
         }
+        return $false
     }
-    return $true
 }
 
 function Install-WebServer ([string]$Service, [int]$Port, [string]$Version) {
