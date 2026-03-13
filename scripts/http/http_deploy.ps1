@@ -59,34 +59,41 @@ function Ensure-Chocolatey {
 # Antes buscaba el primer subdirectorio de choco (alphabeticamente 'legal'),
 # ahora recorre todos los subdirectorios y valida que sea una instalacion real.
 function Find-ApachePath {
-    # 1. Rutas fijas conocidas
+    # 1. Buscar en PATH (Shims o instalaciones manuales)
+    $cmd = Get-Command "httpd.exe" -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $p = Split-Path (Split-Path $cmd.Source -Parent) -Parent
+        if (Test-Path "$p\bin\httpd.exe") { return $p }
+    }
+
+    # 2. Rutas fijas comunes
     $fixed = @(
         "C:\tools\apache24",
         "C:\tools\apache-httpd",
         "C:\Apache24",
-        "C:\Program Files\Apache Software Foundation\Apache2.4",
         "$env:SystemDrive\tools\Apache24",
-        "$env:SystemDrive\tools\apache-httpd"
+        "$env:ProgramFiles\Apache Software Foundation\Apache2.4"
     )
     foreach ($p in $fixed) {
         if (Test-Path "$p\bin\httpd.exe") { return $p }
     }
 
-    # 2. Preguntar a choco por la ruta de instalacion
+    # 3. Preguntar a choco de forma mas flexible
     if (Get-Command choco -ErrorAction SilentlyContinue) {
-        $pathInfo = choco list -lo --id-only --limit-output --path | Select-String "apache-httpd"
-        if ($pathInfo) {
-            $p = ($pathInfo.ToString() -split '\|')[1]
-            if (Test-Path "$p\bin\httpd.exe") { return $p }
-            # A veces choco devuelve la carpeta lib, buscar bin dentro
-            $found = Get-ChildItem -Path $p -Recurse -Filter "httpd.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { return Split-Path $found.DirectoryName -Parent }
+        $lo = choco list -lo --limit-output
+        if ($lo -match "apache-httpd") {
+            # Intentar encontrar la carpeta en choco\lib y buscar bin dentro
+            $chocoPath = "$env:ALLUSERSPROFILE\chocolatey\lib\apache-httpd"
+            if (Test-Path $chocoPath) {
+                $found = Get-ChildItem -Path $chocoPath -Recurse -Filter "httpd.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($found) { return Split-Path $found.DirectoryName -Parent }
+            }
         }
     }
 
-    # 3. Buscar httpd.exe en todo C:\tools (ultimo recurso rapido)
+    # 4. Busqueda en C:\tools (limitada a 2 niveles de profundidad para velocidad)
     if (Test-Path "C:\tools") {
-        $found = Get-ChildItem -Path "C:\tools" -Recurse -Filter "httpd.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        $found = Get-ChildItem -Path "C:\tools" -Depth 2 -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($found) { return Split-Path $found.DirectoryName -Parent }
     }
 
