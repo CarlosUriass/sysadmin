@@ -3,6 +3,9 @@
 param(
     [string]$Service = "",
     [int]$Port = 0,
+    [string]$ServiceVersion = "", # New parameter
+    [alias("Version")]$V,          # Alias for convenience
+    [switch]$ListVersions,         # New switch
     [switch]$Status,
     [switch]$Purge,
     [switch]$Help
@@ -160,14 +163,12 @@ function Install-WebServer {
     param([string]$Service, [int]$Port, [string]$Version)
     Write-LogInfo "Iniciando instalacion de $Service ($Version) en puerto $Port..."
     
-    # Limpiar puerto si esta ocupado (matar procesos bloqueantes)
-    $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
-    if ($conn) {
-        Write-LogWarn "El puerto $Port esta ocupado por PID: $($conn.OwningProcess -join ', '). Liberando..."
-        foreach ($c in $conn) {
-            Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
-        }
-        Start-Sleep -Seconds 2
+    # Limpiar puerto si esta ocupado (Lanzar excepcion segun requerimiento)
+    if (Test-PortInUse -Port $Port) {
+        $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
+        $msg = "Error: El puerto $Port ya esta en uso por PID: $($conn.OwningProcess -join ', ')."
+        Write-LogError $msg
+        throw $msg
     }
     
     if ($Port -lt 1024 -and $Port -ne 80) {
@@ -381,11 +382,8 @@ function Request-ValidPort {
             if (-not (Test-PortInRange -Port $p)) { Write-LogWarn "Rango invalido."; continue }
             if ($p -lt 1024 -and $p -ne 80) { Write-LogWarn "Puerto reservado."; continue }
             if (Test-PortInUse -Port $p) {
-                Write-LogWarn "Puerto ocupado. ¿Liberar proceso? (s/n): " -NoNewline
-                if ((Read-Host).ToLower() -eq 's') {
-                    $conn = Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue
-                    if ($conn) { Stop-Process -Id $conn.OwningProcess -Force; Start-Sleep 1 }
-                } else { continue }
+                Write-LogError "Puerto $p ocupado. Por favor elija otro."
+                continue
             }
             return $p
         }
@@ -408,7 +406,7 @@ function Show-VersionMenu {
 # ==============================================================================
 
 if ($Help) {
-    Write-Host "Uso: .\http_deploy.ps1 [-Service iis|apache|nginx] [-Port <numero>] [-Status] [-Purge]"
+    Write-Host "Uso: .\http_deploy.ps1 [-Service iis|apache|nginx] [-Port <numero>] [-ServiceVersion <version>] [-ListVersions] [-Status] [-Purge]"
     exit 0
 }
 
@@ -455,16 +453,32 @@ if ($Service -ne "") {
         Write-LogError "Servicio '$Service' no válido. Use: $($validServices -join ', ')."
         exit 1
     }
+
+    if ($ListVersions) {
+        $v = Get-DynamicVersions -Service $Service
+        Write-Host "`n--- Versiones disponibles para $Service ---" -ForegroundColor Cyan
+        foreach ($ver in $v) { Write-Host "  - $ver" }
+        exit 0
+    }
+
     if ($Port -eq 0) { Write-LogError "El parámetro -Port es obligatorio para el modo no interactivo."; exit 1 }
     
-    $Version = Get-DynamicVersions -Service $Service | Select-Object -First 1
+    $Version = $ServiceVersion
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        $Version = Get-DynamicVersions -Service $Service | Select-Object -First 1
+    }
     if ($null -eq $Version) { $Version = "LTS" }
     
-    if (Install-WebServer -Service $Service -Port $Port -Version $Version) {
-        Write-LogSuccess "Proceso de despliegue silencioso finalizado correctamente."
-        exit 0
-    } else {
-        Write-LogError "El despliegue silencioso falló."
+    try {
+        if (Install-WebServer -Service $Service -Port $Port -Version $Version) {
+            Write-LogSuccess "Proceso de despliegue silencioso finalizado correctamente."
+            exit 0
+        } else {
+            Write-LogError "El despliegue silencioso falló."
+            exit 1
+        }
+    } catch {
+        Write-LogError "Excepcion capturada: $($_.Exception.Message)"
         exit 1
     }
 }
