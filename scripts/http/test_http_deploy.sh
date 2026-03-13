@@ -14,7 +14,11 @@ echo "=== INICIANDO PRUEBAS DE DESPLIEGUE (LINUX) ===" | tee "$LOG_FILE"
 
 # 1. Limpieza inicial
 echo "[1/3] Limpiando sistema..."
-sudo "$SCRIPT" --purge >/dev/null 2>&1
+if sudo "$SCRIPT" --purge; then
+    echo "Limpieza completada."
+else
+    echo "Advertencia: La limpieza reporto algunos errores (puede ser normal si no hay servicios)."
+fi
 
 # 2. Iterar servicios
 for i in "${!SERVICES[@]}"; do
