@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 # ==============================================================================
 # Script: install_package.sh
 # description: Instala paquetes via apt-get de forma idempotente

@@ -43,7 +43,13 @@ show_help() {
 # --- Parsear argumentos ---
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --service) SERVICE="$2"; shift ;;
+        --service)
+            case ${2,,} in
+                apache|nginx|tomcat) SERVICE="${2,,}" ;;
+                *) log_error "Servicio no soportado: $2. Use: apache, nginx, tomcat" ;;
+            esac
+            shift
+            ;;
         --port) PORT="$2"; shift ;;
         --version) VERSION="$2"; shift ;;
         --list-versions) LIST_VERSIONS=true ;;
@@ -115,9 +121,13 @@ install_web_server() {
 
     log_info "Instalando $srv ($ver) en puerto $p..."
     
-    local pkg_name=$srv
-    if [[ "$srv" == "apache" ]]; then pkg_name="apache2"; fi
-    if [[ "$srv" == "tomcat" ]]; then pkg_name="tomcat9"; fi
+    local pkg_name=""
+    case $srv in
+        apache) pkg_name="apache2" ;;
+        nginx)  pkg_name="nginx" ;;
+        tomcat) pkg_name="tomcat9" ;;
+        *) log_error "Error interno: servicio $srv no mapeado." ;;
+    esac
 
     if [[ -n "$ver" ]]; then
         apt-get update -qq
