@@ -288,7 +288,7 @@ function Main {
                 Install-WebServer -Service "nginx" -Port (Request-ValidPort) -Version $ver
             }
             "4" { Show-Status }
-            "5" { # Llamar lógica purge }
+            "5" { Write-LogWarn "Use --purge para limpiar el sistema." }
             "q" { return }
         }
     }
