@@ -120,15 +120,35 @@ function Install-IIS ([int]$port, [string]$ver) {
     # 2. Modificar el puerto de forma segura usando el modulo de WebAdministration
     Import-Module WebAdministration
     
-    # Damos un par de segundos para que el proveedor IIS:\ este listo
-    Start-Sleep 2 
+    # Damos un momento para que el proveedor IIS:\ se inicialice tras la instalacion
+    Start-Sleep 3 
 
     if (Test-Path "IIS:\Sites\Default Web Site") {
         Log-Info "Cambiando binding al puerto $port via WebAdministration..."
-        # Quitamos cualquier binding previo y ponemos el nuevo
-        Clear-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings
-        New-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings -Value @{protocol="http";bindingInformation="*:${port}:"} | Out-Null
-        Log-OK "Binding actualizado"
+        
+        # Detener el sitio temporalmente para liberar bloqueos en applicationHost.config
+        Stop-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
+        Start-Sleep 1
+
+        try {
+            # Quitamos cualquier binding previo y ponemos el nuevo
+            Clear-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings -ErrorAction Stop
+            New-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings -Value @{protocol="http";bindingInformation="*:${port}:"} -ErrorAction Stop
+            Log-OK "Binding actualizado"
+        } catch {
+            Log-Warn "Error al actualizar binding via PSProvider, intentando via appcmd como respaldo..."
+            # Si el archivo sigue bloqueado, el fallback con appcmd y iisreset a veces logra forzar la escritura
+            iisreset /stop /noforce 2>&1 | Out-Null
+            $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
+            & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1 | Out-Null
+            Start-Service W3SVC -ErrorAction SilentlyContinue
+        }
+
+        # Volver a arrancar el sitio web
+        Start-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
+        
+        # Asegurar que el servicio base esta corriendo
+        Start-Service W3SVC -ErrorAction SilentlyContinue
     } else {
         Log-Warn "No se encontro 'Default Web Site'. Verifica la instalacion."
     }
