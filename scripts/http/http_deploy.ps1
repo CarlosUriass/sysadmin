@@ -127,7 +127,7 @@ function Install-IIS ([int]$port, [string]$ver) {
         Log-Info "Cambiando binding al puerto $port via WebAdministration..."
         # Quitamos cualquier binding previo y ponemos el nuevo
         Clear-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings
-        New-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings -Value @{protocol="http";bindingInformation="*:$port:"} | Out-Null
+        New-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings -Value @{protocol="http";bindingInformation="*:${port}:"} | Out-Null
         Log-OK "Binding actualizado"
     } else {
         Log-Warn "No se encontro 'Default Web Site'. Verifica la instalacion."
