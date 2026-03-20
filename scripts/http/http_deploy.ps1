@@ -35,6 +35,18 @@ function Get-FreePorts ([int]$base) {
     return $out
 }
 
+function Ensure-Port80Free {
+    $blockingProcess = Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue
+    if ($blockingProcess) {
+        $pid = $blockingProcess.OwningProcess
+        $procName = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName
+        Log-Warn "El puerto 80 esta ocupado por el proceso '$procName' (PID: $pid)."
+        Log-Warn "IIS requiere el puerto 80 libre temporalmente durante su instalacion."
+        return $false
+    }
+    return $true
+}
+
 function Ensure-Chocolatey {
     if (Get-Command choco -ErrorAction SilentlyContinue) { return }
     Log-Warn "Instalando Chocolatey..."
@@ -49,15 +61,13 @@ function Get-AvailableVersions ([string]$svc) {
     switch ($svc.ToLower()) {
         "iis"    { return @("10.0") }
         "apache" {
-            $raw = choco search apache-httpd --exact --all-versions 2>$null |
-                   Select-String "apache-httpd\s+\d"
+            $raw = choco search apache-httpd --exact --all-versions 2>$null | Select-String "apache-httpd\s+\d"
             $v = $raw | ForEach-Object { ($_.ToString().Trim() -split '\s+')[1] }
             if (-not $v) { $v = @("2.4.58","2.4.55","2.4.54") }
             return $v | Select-Object -First 5
         }
         "nginx"  {
-            $raw = choco search nginx --exact --all-versions 2>$null |
-                   Select-String "^nginx\s+\d"
+            $raw = choco search nginx --exact --all-versions 2>$null | Select-String "^nginx\s+\d"
             $v = $raw | ForEach-Object { ($_.ToString().Trim() -split '\s+')[1] }
             if (-not $v) { $v = @("1.29.6","1.27.4","1.26.3") }
             return $v | Select-Object -First 5
@@ -77,8 +87,7 @@ function Write-IndexHtml ([string]$path, [string]$svc, [string]$ver, [int]$port)
 function Set-Firewall ([int]$port, [string]$svc) {
     $name = "HTTP-Allow-$svc-$port"
     if (-not (Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -DisplayName $name -Direction Inbound -Protocol TCP `
-                            -LocalPort $port -Action Allow | Out-Null
+        New-NetFirewallRule -DisplayName $name -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow | Out-Null
     }
     Log-Info "Firewall: puerto $port habilitado para $svc"
 }
@@ -87,9 +96,14 @@ function Set-Firewall ([int]$port, [string]$svc) {
 # IIS
 # ---------------------------------------------------------------------------
 function Install-IIS ([int]$port, [string]$ver) {
+    if (-not (Ensure-Port80Free)) {
+        Log-Error "Despliegue cancelado. Limpia el puerto 80 primero."
+        return $false
+    }
+
     Log-Info "Instalando IIS en puerto $port..."
 
-    # 1. Habilitar features minimas
+    # 1. Habilitar features minimas (Esto arranca IIS automaticamente en el puerto 80)
     $features = @(
         "IIS-WebServerRole","IIS-WebServer",
         "IIS-CommonHttpFeatures","IIS-DefaultDocument",
@@ -103,41 +117,33 @@ function Install-IIS ([int]$port, [string]$ver) {
         }
     }
 
-    # 2. Detener IIS completamente antes de tocar el binding
-    iisreset /stop /noforce 2>&1 | Out-Null
-    Stop-Service W3SVC,WAS,AppHostSvc -Force -ErrorAction SilentlyContinue
-    Start-Sleep 3
+    # 2. Modificar el puerto de forma segura usando el modulo de WebAdministration
+    Import-Module WebAdministration
+    
+    # Damos un par de segundos para que el proveedor IIS:\ este listo
+    Start-Sleep 2 
 
-    # 3. Cambiar puerto via appcmd (Requiere WAS para la API COM de configuracion)
-    $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
-    if (Test-Path $appcmd) {
-        Start-Service WAS -ErrorAction SilentlyContinue
-        Start-Sleep 2
-        
-        $out = & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Log-Info "Binding IIS configurado al puerto $port"
-        } else {
-            Log-Warn "appcmd binding: $out"
-        }
+    if (Test-Path "IIS:\Sites\Default Web Site") {
+        Log-Info "Cambiando binding al puerto $port via WebAdministration..."
+        # Quitamos cualquier binding previo y ponemos el nuevo
+        Clear-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings
+        New-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings -Value @{protocol="http";bindingInformation="*:$port:"} | Out-Null
+        Log-OK "Binding actualizado"
     } else {
-        Log-Warn "appcmd.exe no encontrado - el binding se mantiene en el default"
+        Log-Warn "No se encontro 'Default Web Site'. Verifica la instalacion."
     }
 
-    # 4. Pagina de prueba
+    # 3. Pagina de prueba
     Write-IndexHtml -path "C:\inetpub\wwwroot\index.html" -svc "IIS" -ver $ver -port $port
 
-    # 5. Arrancar en orden
-    Start-Service AppHostSvc -ErrorAction SilentlyContinue; Start-Sleep 1
-    Start-Service WAS        -ErrorAction SilentlyContinue; Start-Sleep 1
-    Start-Service W3SVC      -ErrorAction SilentlyContinue; Start-Sleep 4
-
+    # 4. Validar
     if (Test-PortInUse $port) {
         Log-OK "IIS escuchando en puerto $port"
         return $true
     }
+    
     Log-Error "IIS no responde en puerto $port"
-    Log-Error "W3SVC: $((Get-Service W3SVC -EA SilentlyContinue).Status) | WAS: $((Get-Service WAS -EA SilentlyContinue).Status)"
+    Log-Error "W3SVC: $((Get-Service W3SVC -EA SilentlyContinue).Status)"
     return $false
 }
 
@@ -148,14 +154,9 @@ function Get-ApachePath {
     $dest = "C:\tools\Apache24"
     if (Test-Path "$dest\bin\httpd.exe") { return $dest }
 
-    # Buscar ZIP en cache de Chocolatey y extraer
     $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\apache-httpd\tools"
-    $zip = Get-ChildItem $chocoLib -Filter "httpd-*-x64-*.zip" -EA SilentlyContinue |
-           Sort-Object Name -Descending | Select-Object -First 1
-    if (-not $zip) {
-        $zip = Get-ChildItem $chocoLib -Filter "httpd-*.zip" -EA SilentlyContinue |
-               Select-Object -First 1
-    }
+    $zip = Get-ChildItem $chocoLib -Filter "httpd-*-x64-*.zip" -EA SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $zip) { $zip = Get-ChildItem $chocoLib -Filter "httpd-*.zip" -EA SilentlyContinue | Select-Object -First 1 }
     if (-not $zip) { Log-Error "ZIP de Apache no encontrado en $chocoLib"; return $null }
 
     Log-Info "Extrayendo $($zip.Name)..."
@@ -164,8 +165,7 @@ function Get-ApachePath {
     try { [IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, "C:\tools") } catch { Log-Warn "$_" }
 
     if (Test-Path "$dest\bin\httpd.exe") { return $dest }
-    $found = Get-ChildItem "C:\tools" -Recurse -Filter "httpd.exe" -EA SilentlyContinue |
-             Select-Object -First 1
+    $found = Get-ChildItem "C:\tools" -Recurse -Filter "httpd.exe" -EA SilentlyContinue | Select-Object -First 1
     if ($found) { return Split-Path $found.DirectoryName -Parent }
     return $null
 }
@@ -181,50 +181,28 @@ function Install-Apache ([int]$port, [string]$ver) {
     $conf = "$root\conf\httpd.conf"
     if (-not (Test-Path $conf)) { Log-Error "httpd.conf no encontrado"; return $false }
 
-    # ---- Edicion minima del httpd.conf ----
     $c = Get-Content $conf -Raw
-
-    # Corregir SRVROOT hardcodeado por el build de Chocolatey
     $c = $c -replace 'Define SRVROOT "[^"]*"',   'Define SRVROOT "C:/tools/Apache24"'
     $c = $c -replace '(?<![/\w])/?Apache24/',     'C:/tools/Apache24/'
-
-    # Solo cambiar el puerto de escucha
     $c = $c -replace '(?m)^Listen\s+\d+$', "Listen $port"
-
     [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
 
-    # Validar sintaxis antes de arrancar
     $test = & "$root\bin\httpd.exe" -t 2>&1
-    if ($test -notmatch "Syntax OK") {
-        Log-Error "httpd.conf invalido:`n$test"; return $false
-    }
-    Log-Info "Sintaxis de httpd.conf OK"
+    if ($test -notmatch "Syntax OK") { Log-Error "httpd.conf invalido:`n$test"; return $false }
 
-    # Pagina de prueba
     if (-not (Test-Path "$root\logs")) { New-Item -ItemType Directory "$root\logs" -Force | Out-Null }
     Write-IndexHtml -path "$root\htdocs\index.html" -svc "Apache" -ver $ver -port $port
 
-    # Registrar / arrancar servicio
     $svcName = "Apache2.4"
     if (-not (Get-Service $svcName -EA SilentlyContinue)) {
         $out = & "$root\bin\httpd.exe" -k install -n $svcName 2>&1
-        if ($LASTEXITCODE -ne 0) { Log-Warn "httpd -k install: $out" }
     }
     Start-Service $svcName -ErrorAction SilentlyContinue
     Start-Sleep 3
 
-    if (Test-PortInUse $port) {
-        Log-OK "Apache escuchando en puerto $port"
-        return $true
-    }
-    # Diagnostico basico
-    $errLog = "$root\logs\error.log"
-    if (Test-Path $errLog) {
-        Log-Error "Apache no responde. Ultimas lineas de error.log:"
-        Get-Content $errLog -Tail 10 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-    } else {
-        Log-Error "Apache no responde en $port y no hay error.log"
-    }
+    if (Test-PortInUse $port) { Log-OK "Apache escuchando en puerto $port"; return $true }
+    
+    Log-Error "Apache no responde en $port"
     return $false
 }
 
@@ -236,8 +214,7 @@ function Get-NginxPath {
     if (Test-Path "$dest\nginx.exe") { return $dest }
 
     $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\nginx\tools"
-    $zip = Get-ChildItem $chocoLib -Filter "nginx-*.zip" -EA SilentlyContinue |
-           Sort-Object Name -Descending | Select-Object -First 1
+    $zip = Get-ChildItem $chocoLib -Filter "nginx-*.zip" -EA SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
     if (-not $zip) { Log-Error "ZIP de Nginx no encontrado en $chocoLib"; return $null }
 
     Log-Info "Extrayendo $($zip.Name)..."
@@ -246,16 +223,14 @@ function Get-NginxPath {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     try { [IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, $tmp) } catch { Log-Warn "$_" }
 
-    $inner = Get-ChildItem $tmp -Directory -EA SilentlyContinue |
-             Where-Object { $_.Name -match "^nginx" } | Select-Object -First 1
+    $inner = Get-ChildItem $tmp -Directory -EA SilentlyContinue | Where-Object { $_.Name -match "^nginx" } | Select-Object -First 1
     if ($inner -and (Test-Path "$($inner.FullName)\nginx.exe")) {
         if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
         Move-Item $inner.FullName $dest
         Remove-Item $tmp -Recurse -Force -EA SilentlyContinue
         return $dest
     }
-    $found = Get-ChildItem $tmp -Recurse -Filter "nginx.exe" -EA SilentlyContinue |
-             Select-Object -First 1
+    $found = Get-ChildItem $tmp -Recurse -Filter "nginx.exe" -EA SilentlyContinue | Select-Object -First 1
     if ($found) { return $found.DirectoryName }
     return $null
 }
@@ -271,18 +246,13 @@ function Install-Nginx ([int]$port, [string]$ver) {
     $conf = "$root\conf\nginx.conf"
     if (-not (Test-Path $conf)) { Log-Error "nginx.conf no encontrado"; return $false }
 
-    # ---- Edicion minima del nginx.conf ----
     $c = Get-Content $conf -Raw
-
-    # Solo cambiar el puerto de escucha
     $c = $c -replace '(?m)(listen\s+)\d+(;)',       ('$1' + $port + '$2')
     $c = $c -replace '(?m)(listen\s+\[::\]:)\d+(;)', ('$1' + $port + '$2')
-
     [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
 
     Write-IndexHtml -path "$root\html\index.html" -svc "Nginx" -ver $ver -port $port
 
-    # Matar procesos huerfanos, luego arrancar desde el directorio de nginx
     Stop-Process -Name nginx -Force -EA SilentlyContinue
     Start-Sleep 1
     Push-Location $root
@@ -290,17 +260,9 @@ function Install-Nginx ([int]$port, [string]$ver) {
     Pop-Location
     Start-Sleep 3
 
-    if (Test-PortInUse $port) {
-        Log-OK "Nginx escuchando en puerto $port"
-        return $true
-    }
-    $errLog = "$root\logs\error.log"
-    if (Test-Path $errLog) {
-        Log-Error "Nginx no responde. Ultimas lineas de error.log:"
-        Get-Content $errLog -Tail 10 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-    } else {
-        Log-Error "Nginx no responde en $port y no hay error.log"
-    }
+    if (Test-PortInUse $port) { Log-OK "Nginx escuchando en puerto $port"; return $true }
+    
+    Log-Error "Nginx no responde en $port"
     return $false
 }
 
@@ -335,20 +297,16 @@ function Deploy ([string]$svc, [int]$port, [string]$ver) {
 # ---------------------------------------------------------------------------
 function Show-Status {
     Write-Host "`n--- SERVICIOS ---" -ForegroundColor White
-    Get-Service W3SVC,WAS,Apache2.4,nginx -EA SilentlyContinue |
-        Select-Object Name,Status | Format-Table -AutoSize
+    Get-Service W3SVC,WAS,Apache2.4,nginx -EA SilentlyContinue | Select-Object Name,Status | Format-Table -AutoSize
 
     Write-Host "--- PUERTOS EN ESCUCHA ---" -ForegroundColor White
-    Get-NetTCPConnection -State Listen -EA SilentlyContinue |
-        Where-Object { $_.LocalPort -lt 10000 -and $_.LocalPort -ge 80 } |
-        Select-Object LocalAddress,LocalPort,OwningProcess |
-        Sort-Object LocalPort | Format-Table -AutoSize
+    Get-NetTCPConnection -State Listen -EA SilentlyContinue | Where-Object { $_.LocalPort -lt 10000 -and $_.LocalPort -ge 80 } | Select-Object LocalAddress,LocalPort,OwningProcess | Sort-Object LocalPort | Format-Table -AutoSize
 }
 
 function Invoke-Purge {
     Log-Warn "Purgando instalaciones..."
     iisreset /stop /noforce 2>&1 | Out-Null
-    Stop-Service AppHostSvc,WAS,Apache2.4,nginx -Force -EA SilentlyContinue
+    Stop-Service AppHostSvc,WAS,W3SVC,Apache2.4,nginx -Force -EA SilentlyContinue
     Stop-Process -Name nginx,httpd -Force -EA SilentlyContinue
     Start-Sleep 2
 
@@ -357,7 +315,7 @@ function Invoke-Purge {
 
     Ensure-Chocolatey
     choco uninstall nginx apache-httpd -y --remove-dependencies 2>&1 | Out-Null
-    Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -EA SilentlyContinue | Out-Null
+    Disable-WindowsOptionalFeature -Online -FeatureName "IIS-WebServerRole" -NoRestart -Remove -EA SilentlyContinue | Out-Null
 
     Remove-Item "C:\tools\Apache24","C:\tools\nginx" -Recurse -Force -EA SilentlyContinue
     Get-NetFirewallRule -DisplayName "HTTP-Allow-*" -EA SilentlyContinue | Remove-NetFirewallRule
@@ -384,9 +342,7 @@ function Ask-Version ([string]$svc) {
     for ($i = 0; $i -lt $vers.Count; $i++) { Write-Host "  $($i+1)) $($vers[$i])" }
     $sel = Read-Host "Opcion (Enter = mas reciente)"
     $idx = 0
-    if ([int]::TryParse($sel,[ref]$idx) -and $idx -ge 1 -and $idx -le $vers.Count) {
-        return $vers[$idx - 1]
-    }
+    if ([int]::TryParse($sel,[ref]$idx) -and $idx -ge 1 -and $idx -le $vers.Count) { return $vers[$idx - 1] }
     return $vers[0]
 }
 
@@ -395,13 +351,12 @@ function Ask-Version ([string]$svc) {
 # ---------------------------------------------------------------------------
 function Main {
     if ($Help) {
-        Write-Host "Uso: .\http_deploy_minimal.ps1 [-Service iis|apache|nginx] [-Port N] [-ServiceVersion V] [-Status] [-Purge] [-ListVersions]"
+        Write-Host "Uso: .\http_deploy.ps1 [-Service iis|apache|nginx] [-Port N] [-ServiceVersion V] [-Status] [-Purge] [-ListVersions]"
         return
     }
     if ($Status)  { Show-Status;  return }
     if ($Purge)   { Invoke-Purge; return }
 
-    # Modo no-interactivo (parametros)
     if ($Service -ne "") {
         if ($ListVersions) {
             Get-AvailableVersions $Service | ForEach-Object { Write-Host "  - $_" }
@@ -413,7 +368,6 @@ function Main {
         return
     }
 
-    # Modo interactivo
     while ($true) {
         Write-Host "`n=== APROVISIONAMIENTO HTTP ===" -ForegroundColor Cyan
         Write-Host "  1) IIS`n  2) Apache`n  3) Nginx`n  4) Estado`n  5) Purgar`n  q) Salir"
