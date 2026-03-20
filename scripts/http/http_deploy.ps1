@@ -96,69 +96,64 @@ function Set-Firewall ([int]$port, [string]$svc) {
 # IIS
 # ---------------------------------------------------------------------------
 function Install-IIS ([int]$port, [string]$ver) {
-    if (-not (Ensure-Port80Free)) {
-        Log-Error "Despliegue cancelado. Limpia el puerto 80 primero."
+    Log-Info "Instalando IIS en puerto $port..."
+
+    # 1. Ruta al helper que instala features desde el WIM de instalacion
+    $installFeature = Join-Path $PSScriptRoot "..\..\utils\ps1\install_feature.ps1"
+    if (-not (Test-Path $installFeature)) {
+        Log-Error "No se encontro install_feature.ps1 en $installFeature"
         return $false
     }
 
-    Log-Info "Instalando IIS en puerto $port..."
-
-    # 1. Habilitar features minimas
-    $features = @(
-        "IIS-WebServerRole","IIS-WebServer",
-        "IIS-CommonHttpFeatures","IIS-DefaultDocument",
-        "IIS-StaticContent","IIS-RequestFiltering","IIS-ManagementConsole"
-    )
-    foreach ($f in $features) {
-        $state = (Get-WindowsOptionalFeature -Online -FeatureName $f -EA SilentlyContinue).State
-        if ($state -ne "Enabled") {
-            Log-Info "Habilitando: $f"
-            Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart | Out-Null
-        }
+    # Instalar el rol Web-Server con todas las sub-features de una sola llamada
+    Log-Info "Instalando rol Web-Server via install_feature.ps1..."
+    try {
+        & $installFeature -FeatureName "Web-Server" -IncludeAllSubFeature -ErrorAction Stop
+    } catch {
+        Log-Error "Fallo instalacion del rol Web-Server: $_"
+        return $false
     }
 
-    # 2. Modificar el puerto forzando la liberacion del sitio
-    Import-Module WebAdministration
-    Start-Sleep 4 # Breve respiro para que el proveedor IIS:\ se registre
+    # Verificar que los servicios de IIS existen tras la instalacion
+    if (-not (Get-Service W3SVC -ErrorAction SilentlyContinue)) {
+        Log-Error "W3SVC no aparecio tras la instalacion. Verifica el WIM source."
+        return $false
+    }
 
-    if (Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue) {
-        Log-Info "Deteniendo sitio temporalmente para liberar bloqueos..."
-        
-        # El truco de magia: detener el Pool y el Sitio libera el applicationHost.config
-        Stop-WebAppPool -Name "DefaultAppPool" -ErrorAction SilentlyContinue
-        Stop-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
-        Start-Sleep 1
+    # 2. Arrancar AppHostSvc para que appcmd use su interfaz COM
+    Start-Service AppHostSvc -ErrorAction SilentlyContinue
+    Start-Sleep 2
 
-        Log-Info "Aplicando nuevo puerto $port..."
-        try {
-            Remove-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -ErrorAction SilentlyContinue
-            New-WebBinding -Name "Default Web Site" -Port $port -Protocol "http" -ErrorAction Stop
-            Log-OK "Binding actualizado exitosamente"
-        } catch {
-            Log-Warn "Fallo WebBinding, usando appcmd forzado: $($_.Exception.Message)"
-            $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
-            & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1 | Out-Null
+    # Detener solo W3SVC para que appcmd pueda modificar applicationHost.config
+    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
+    Start-Sleep 1
+
+    # Cambiar el binding via appcmd (con AppHostSvc activo = commit COM, sin lock)
+    $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
+    if (Test-Path $appcmd) {
+        $out = & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Log-Info "Binding -> puerto $port ($out)"
+        } else {
+            Log-Warn "appcmd: $out"
         }
-
-        # Volver a encender todo
-        Start-WebAppPool -Name "DefaultAppPool" -ErrorAction SilentlyContinue
-        Start-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
-        Start-Service W3SVC, WAS -ErrorAction SilentlyContinue
-    } else {
-        Log-Warn "No se encontro 'Default Web Site'. Verifica la instalacion."
     }
 
     # 3. Pagina de prueba
     Write-IndexHtml -path "C:\inetpub\wwwroot\index.html" -svc "IIS" -ver $ver -port $port
 
-    # 4. Validar
+    # 4. Arrancar IIS completo
+    Start-Service WAS -ErrorAction SilentlyContinue; Start-Sleep 1
+    Start-Service W3SVC -ErrorAction SilentlyContinue; Start-Sleep 4
+
+    # 5. Validar
     if (Test-PortInUse $port) {
         Log-OK "IIS escuchando en puerto $port"
         return $true
     }
-    
-    Log-Error "IIS no responde en puerto $port"
-    Log-Error "W3SVC: $((Get-Service W3SVC -EA SilentlyContinue).Status)"
+    $w3 = (Get-Service W3SVC -EA SilentlyContinue).Status
+    $was = (Get-Service WAS -EA SilentlyContinue).Status
+    Log-Error "IIS no responde en puerto $port | W3SVC=$w3 | WAS=$was"
     return $false
 }
 
