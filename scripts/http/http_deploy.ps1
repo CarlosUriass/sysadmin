@@ -130,16 +130,20 @@ function Set-ServiceUserAndPermissions {
 }
 
 function Stop-IISServices {
-    Write-LogInfo "Deteniendo IIS (iisreset /stop)..."
-    # iisreset /stop termina TODOS los procesos IIS (w3wp, WAS, W3SVC)
-    # garantizando que applicationHost.config quede desbloqueado
+    Write-LogInfo "Deteniendo IIS y AppHostSvc..."
+    # AppHostSvc mantiene applicationHost.config abierto permanentemente
+    # y NO es detenido por iisreset /stop — hay que detenerlo manualmente
     iisreset /stop /noforce 2>&1 | Out-Null
-    # Matar procesos residuales por si acaso
+    Stop-Service -Name 'AppHostSvc' -Force -ErrorAction SilentlyContinue
     Stop-Process -Name 'w3wp','inetinfo' -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3  # Dar tiempo al OS para liberar file handles
+    Start-Sleep -Seconds 2
+    Write-LogInfo "AppHostSvc: $((Get-Service AppHostSvc -EA SilentlyContinue).Status)"
 }
 function Start-IISServices {
     Write-LogInfo "Iniciando IIS (iisreset /start)..."
+    # Arrancar AppHostSvc primero — WAS depende de el
+    Start-Service -Name 'AppHostSvc' -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
     $r = iisreset /start 2>&1
     Start-Sleep -Seconds 3
     $w3Status = (Get-Service W3SVC -ErrorAction SilentlyContinue).Status
