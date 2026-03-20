@@ -115,7 +115,7 @@ function Install-IIS ([int]$port, [string]$ver) {
         & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1 | Out-Null
         Log-Info "Binding IIS configurado al puerto $port"
     } else {
-        Log-Warn "appcmd.exe no encontrado — el binding se mantiene en el default"
+        Log-Warn "appcmd.exe no encontrado - el binding se mantiene en el default"
     }
 
     # 4. Pagina de prueba
@@ -161,7 +161,8 @@ function Get-ApachePath {
     if (Test-Path "$dest\bin\httpd.exe") { return $dest }
     $found = Get-ChildItem "C:\tools" -Recurse -Filter "httpd.exe" -EA SilentlyContinue |
              Select-Object -First 1
-    return if ($found) { Split-Path $found.DirectoryName -Parent } else { $null }
+    if ($found) { return Split-Path $found.DirectoryName -Parent }
+    return $null
 }
 
 function Install-Apache ([int]$port, [string]$ver) {
@@ -250,7 +251,8 @@ function Get-NginxPath {
     }
     $found = Get-ChildItem $tmp -Recurse -Filter "nginx.exe" -EA SilentlyContinue |
              Select-Object -First 1
-    return if ($found) { $found.DirectoryName } else { $null }
+    if ($found) { return $found.DirectoryName }
+    return $null
 }
 
 function Install-Nginx ([int]$port, [string]$ver) {
@@ -268,8 +270,8 @@ function Install-Nginx ([int]$port, [string]$ver) {
     $c = Get-Content $conf -Raw
 
     # Solo cambiar el puerto de escucha
-    $c = $c -replace '(?m)(listen\s+)\d+(;)',         "`${1}${port}`$2"
-    $c = $c -replace '(?m)(listen\s+\[::\]:)\d+(;)',  "`${1}${port}`$2"
+    $c = $c -replace '(?m)(listen\s+)\d+(;)',        ('$1' + $port + '$2')
+    $c = $c -replace '(?m)(listen\s+\[::\]:)\d+(;)', ('$1' + $port + '$2')
 
     [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
 
