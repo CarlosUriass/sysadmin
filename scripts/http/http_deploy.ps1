@@ -103,7 +103,7 @@ function Install-IIS ([int]$port, [string]$ver) {
 
     Log-Info "Instalando IIS en puerto $port..."
 
-    # 1. Habilitar features minimas (Esto arranca IIS automaticamente en el puerto 80)
+    # 1. Habilitar features minimas
     $features = @(
         "IIS-WebServerRole","IIS-WebServer",
         "IIS-CommonHttpFeatures","IIS-DefaultDocument",
@@ -117,38 +117,36 @@ function Install-IIS ([int]$port, [string]$ver) {
         }
     }
 
-    # 2. Modificar el puerto de forma segura usando el modulo de WebAdministration
+    # 2. Modificar el puerto usando los cmdlets específicos de WebBinding
     Import-Module WebAdministration
     
-    # Damos un momento para que el proveedor IIS:\ se inicialice tras la instalacion
-    Start-Sleep 3 
+    # Damos 5 segundos para que Windows termine de asentar los archivos de IIS
+    Start-Sleep 5 
 
-    if (Test-Path "IIS:\Sites\Default Web Site") {
-        Log-Info "Cambiando binding al puerto $port via WebAdministration..."
+    if (Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue) {
+        Log-Info "Cambiando binding al puerto $port..."
         
-        # Detener el sitio temporalmente para liberar bloqueos en applicationHost.config
-        Stop-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
-        Start-Sleep 1
-
         try {
-            # Quitamos cualquier binding previo y ponemos el nuevo
-            Clear-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings -ErrorAction Stop
-            New-ItemProperty -Path "IIS:\Sites\Default Web Site" -Name Bindings -Value @{protocol="http";bindingInformation="*:${port}:"} -ErrorAction Stop
-            Log-OK "Binding actualizado"
+            # Remover el binding por defecto del puerto 80
+            Remove-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -ErrorAction Stop
+            
+            # Agregar el nuevo binding en el puerto elegido
+            New-WebBinding -Name "Default Web Site" -Port $port -Protocol "http" -ErrorAction Stop
+            Log-OK "Binding actualizado exitosamente"
         } catch {
-            Log-Warn "Error al actualizar binding via PSProvider, intentando via appcmd como respaldo..."
-            # Si el archivo sigue bloqueado, el fallback con appcmd y iisreset a veces logra forzar la escritura
-            iisreset /stop /noforce 2>&1 | Out-Null
+            Log-Warn "Error con WebBinding: $($_.Exception.Message)"
+            Log-Info "Intentando via appcmd..."
+            
+            # Asegurar que WAS corre para usar la API COM y evitar bloqueo de archivo
+            Start-Service WAS -ErrorAction SilentlyContinue 
             $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
-            & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1 | Out-Null
-            Start-Service W3SVC -ErrorAction SilentlyContinue
+            $out = & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1
+            if ($LASTEXITCODE -ne 0) { Log-Warn "appcmd output: $out" }
         }
 
-        # Volver a arrancar el sitio web
+        # Asegurar que los servicios y el sitio web están arriba
+        Start-Service WAS, W3SVC -ErrorAction SilentlyContinue
         Start-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
-        
-        # Asegurar que el servicio base esta corriendo
-        Start-Service W3SVC -ErrorAction SilentlyContinue
     } else {
         Log-Warn "No se encontro 'Default Web Site'. Verifica la instalacion."
     }
