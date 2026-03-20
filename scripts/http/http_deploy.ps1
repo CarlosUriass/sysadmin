@@ -154,7 +154,6 @@ function Start-IISServices {
 
 function Apply-IISHardening ([int]$Port) {
     Write-LogInfo "Aplicando Hardening a IIS..."
-    Import-Module WebAdministration -ErrorAction Stop
     $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
 
     # 1. Detener IIS completamente
