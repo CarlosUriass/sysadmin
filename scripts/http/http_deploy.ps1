@@ -259,9 +259,11 @@ function Install-Nginx ([int]$port, [string]$ver) {
     if (-not (Test-Path $conf)) { Log-Error "nginx.conf no encontrado"; return $false }
 
     $c = Get-Content $conf -Raw
-    # Simplificar reemplazo para evitar ambigüedad con backreferences ($13000)
-    $c = $c -replace '(?m)listen\s+\d+;',       "listen $port;"
-    $c = $c -replace '(?m)listen\s+\[::\]:\d+;', "listen [::]:$port;"
+    
+    # CORRECCIÓN: Usar ${1} para que no se fusione con el número del puerto
+    $c = $c -replace '(?m)(listen\s+)\d+(;)',        ('${1}' + $port + '$2')
+    $c = $c -replace '(?m)(listen\s+\[::\]:)\d+(;)', ('${1}' + $port + '$2')
+    
     [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
 
     Write-IndexHtml -path "$root\html\index.html" -svc "Nginx" -ver $ver -port $port
