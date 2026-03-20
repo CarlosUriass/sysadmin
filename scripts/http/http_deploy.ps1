@@ -150,27 +150,24 @@ function Start-IISServices {
 function Apply-IISHardening ([int]$Port) {
     Write-LogInfo "Aplicando Hardening a IIS..."
     Import-Module WebAdministration -ErrorAction Stop
-    $configPath = "$env:SystemRoot\system32\inetsrv\config\applicationHost.config"
+    $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
     Stop-IISServices
-    try {
-        [xml]$config = Get-Content $configPath -Encoding UTF8
-        $site = $config.configuration.'system.applicationHost'.sites.site | Where-Object { $_.name -eq "Default Web Site" }
-        if ($site) {
-            $site.bindings.RemoveAll()
-            $b = $config.CreateElement("binding")
-            $b.SetAttribute("protocol", "http")
-            $b.SetAttribute("bindingInformation", "*:${Port}:")
-            $site.bindings.AppendChild($b) | Out-Null
-            $config.Save($configPath)
-            Write-LogInfo "Binding IIS -> puerto $Port"
-        }
-    } catch { Write-LogWarn "applicationHost.config: $_" }
     Start-IISServices
+
+    # Preparar wwwroot y web.config ANTES de manipular bindings
     $webDir = "C:\inetpub\wwwroot"
     if (-not (Test-Path $webDir)) { New-Item -ItemType Directory -Path $webDir -Force | Out-Null }
     $wc = '<?xml version="1.0" encoding="UTF-8"?><configuration><system.webServer><httpProtocol><customHeaders><clear /><remove name="X-Powered-By" /><add name="X-Frame-Options" value="SAMEORIGIN" /><add name="X-Content-Type-Options" value="nosniff" /></customHeaders></httpProtocol><security><requestFiltering removeServerHeader="true"><verbs allowUnlisted="true"><clear /><add verb="TRACE" allowed="false" /><add verb="TRACK" allowed="false" /></verbs></requestFiltering></security></system.webServer></configuration>'
     [System.IO.File]::WriteAllText("$webDir\web.config", $wc, [System.Text.UTF8Encoding]::new($false))
     Write-LogInfo "web.config escrito."
+
+    # Cambiar binding via appcmd (evita el bug de AppendChild sobre XmlElement vacio)
+    try {
+        & $appcmd set site "Default Web Site" /bindings:"http/*:${Port}:" | Out-Null
+        Write-LogInfo "Binding IIS -> puerto $Port"
+    } catch {
+        Write-LogWarn "appcmd binding: $_"
+    }
 }
 
 function Set-FirewallRule ([int]$Port, [string]$Svc) {
