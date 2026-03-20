@@ -117,56 +117,41 @@ function Install-IIS ([int]$port, [string]$ver) {
         }
     }
 
-    # 2. Modificar el puerto con Bucle de Espera (Wait Loop)
+    # 2. Modificar el puerto forzando la liberacion del sitio
     Import-Module WebAdministration
-    
-    $configPath = "$env:SystemRoot\system32\inetsrv\config\applicationHost.config"
-    $locked = $true
-    $retries = 0
-    $maxRetries = 30 # Le damos hasta 60 segundos porque TiWorker puede ser lento
+    Start-Sleep 4 # Breve respiro para que el proveedor IIS:\ se registre
 
-    Log-Info "Esperando a que TiWorker/TrustedInstaller liberen la configuracion..."
-    while ($locked -and $retries -lt $maxRetries) {
-        try {
-            # Intentamos abrir el archivo de forma exclusiva para comprobar el bloqueo
-            $testLock = [System.IO.File]::Open($configPath, 'Open', 'Read', 'None')
-            $testLock.Close()
-            $locked = $false
-            Log-OK "Archivo liberado por el instalador de Windows."
-        } catch {
-            Start-Sleep 2
-            $retries++
-            Write-Host "  -> Archivo bloqueado, reintentando... ($retries/$maxRetries)" -ForegroundColor DarkGray
-        }
-    }
-
-    if ($locked) {
-        Log-Error "Windows no solto el archivo despues de 60 segundos. El servidor podria estar muy saturado."
-        return $false
-    }
-
-    # 3. Aplicar el nuevo puerto
     if (Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue) {
-        Log-Info "Cambiando binding al puerto $port..."
-        try {
-            Remove-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -ErrorAction Stop
-            New-WebBinding -Name "Default Web Site" -Port $port -Protocol "http" -ErrorAction Stop
-            Log-OK "Binding actualizado exitosamente a $port"
-        } catch {
-            Log-Warn "Error con WebBinding: $($_.Exception.Message)"
-        }
+        Log-Info "Deteniendo sitio temporalmente para liberar bloqueos..."
         
-        # Reiniciar servicios para asentar configuracion
-        Start-Service WAS, W3SVC -ErrorAction SilentlyContinue
+        # El truco de magia: detener el Pool y el Sitio libera el applicationHost.config
+        Stop-WebAppPool -Name "DefaultAppPool" -ErrorAction SilentlyContinue
+        Stop-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
+        Start-Sleep 1
+
+        Log-Info "Aplicando nuevo puerto $port..."
+        try {
+            Remove-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -ErrorAction SilentlyContinue
+            New-WebBinding -Name "Default Web Site" -Port $port -Protocol "http" -ErrorAction Stop
+            Log-OK "Binding actualizado exitosamente"
+        } catch {
+            Log-Warn "Fallo WebBinding, usando appcmd forzado: $($_.Exception.Message)"
+            $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
+            & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1 | Out-Null
+        }
+
+        # Volver a encender todo
+        Start-WebAppPool -Name "DefaultAppPool" -ErrorAction SilentlyContinue
         Start-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
+        Start-Service W3SVC, WAS -ErrorAction SilentlyContinue
     } else {
         Log-Warn "No se encontro 'Default Web Site'. Verifica la instalacion."
     }
 
-    # 4. Pagina de prueba
+    # 3. Pagina de prueba
     Write-IndexHtml -path "C:\inetpub\wwwroot\index.html" -svc "IIS" -ver $ver -port $port
 
-    # 5. Validar
+    # 4. Validar
     if (Test-PortInUse $port) {
         Log-OK "IIS escuchando en puerto $port"
         return $true
@@ -175,94 +160,6 @@ function Install-IIS ([int]$port, [string]$ver) {
     Log-Error "IIS no responde en puerto $port"
     Log-Error "W3SVC: $((Get-Service W3SVC -EA SilentlyContinue).Status)"
     return $false
-}
-
-# ---------------------------------------------------------------------------
-# APACHE
-# ---------------------------------------------------------------------------
-function Get-ApachePath {
-    $dest = "C:\tools\Apache24"
-    if (Test-Path "$dest\bin\httpd.exe") { return $dest }
-
-    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\apache-httpd\tools"
-    $zip = Get-ChildItem $chocoLib -Filter "httpd-*-x64-*.zip" -EA SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-    if (-not $zip) { $zip = Get-ChildItem $chocoLib -Filter "httpd-*.zip" -EA SilentlyContinue | Select-Object -First 1 }
-    if (-not $zip) { Log-Error "ZIP de Apache no encontrado en $chocoLib"; return $null }
-
-    Log-Info "Extrayendo $($zip.Name)..."
-    New-Item -ItemType Directory "C:\tools" -Force | Out-Null
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    try { [IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, "C:\tools") } catch { Log-Warn "$_" }
-
-    if (Test-Path "$dest\bin\httpd.exe") { return $dest }
-    $found = Get-ChildItem "C:\tools" -Recurse -Filter "httpd.exe" -EA SilentlyContinue | Select-Object -First 1
-    if ($found) { return Split-Path $found.DirectoryName -Parent }
-    return $null
-}
-
-function Install-Apache ([int]$port, [string]$ver) {
-    Log-Info "Instalando Apache $ver en puerto $port..."
-    Ensure-Chocolatey
-    choco install apache-httpd --version=$ver -y --no-progress --force 2>&1 | Out-Null
-
-    $root = Get-ApachePath
-    if (-not $root) { return $false }
-
-    $conf = "$root\conf\httpd.conf"
-    if (-not (Test-Path $conf)) { Log-Error "httpd.conf no encontrado"; return $false }
-
-    $c = Get-Content $conf -Raw
-    $c = $c -replace 'Define SRVROOT "[^"]*"',   'Define SRVROOT "C:/tools/Apache24"'
-    $c = $c -replace '(?<![/\w])/?Apache24/',     'C:/tools/Apache24/'
-    $c = $c -replace '(?m)^Listen\s+\d+$', "Listen $port"
-    [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
-
-    $test = & "$root\bin\httpd.exe" -t 2>&1
-    if ($test -notmatch "Syntax OK") { Log-Error "httpd.conf invalido:`n$test"; return $false }
-
-    if (-not (Test-Path "$root\logs")) { New-Item -ItemType Directory "$root\logs" -Force | Out-Null }
-    Write-IndexHtml -path "$root\htdocs\index.html" -svc "Apache" -ver $ver -port $port
-
-    $svcName = "Apache2.4"
-    if (-not (Get-Service $svcName -EA SilentlyContinue)) {
-        $out = & "$root\bin\httpd.exe" -k install -n $svcName 2>&1
-    }
-    Start-Service $svcName -ErrorAction SilentlyContinue
-    Start-Sleep 3
-
-    if (Test-PortInUse $port) { Log-OK "Apache escuchando en puerto $port"; return $true }
-    
-    Log-Error "Apache no responde en $port"
-    return $false
-}
-
-# ---------------------------------------------------------------------------
-# NGINX
-# ---------------------------------------------------------------------------
-function Get-NginxPath {
-    $dest = "C:\tools\nginx"
-    if (Test-Path "$dest\nginx.exe") { return $dest }
-
-    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\nginx\tools"
-    $zip = Get-ChildItem $chocoLib -Filter "nginx-*.zip" -EA SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-    if (-not $zip) { Log-Error "ZIP de Nginx no encontrado en $chocoLib"; return $null }
-
-    Log-Info "Extrayendo $($zip.Name)..."
-    $tmp = "C:\tools\nginx_tmp"
-    New-Item -ItemType Directory $tmp -Force | Out-Null
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    try { [IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, $tmp) } catch { Log-Warn "$_" }
-
-    $inner = Get-ChildItem $tmp -Directory -EA SilentlyContinue | Where-Object { $_.Name -match "^nginx" } | Select-Object -First 1
-    if ($inner -and (Test-Path "$($inner.FullName)\nginx.exe")) {
-        if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-        Move-Item $inner.FullName $dest
-        Remove-Item $tmp -Recurse -Force -EA SilentlyContinue
-        return $dest
-    }
-    $found = Get-ChildItem $tmp -Recurse -Filter "nginx.exe" -EA SilentlyContinue | Select-Object -First 1
-    if ($found) { return $found.DirectoryName }
-    return $null
 }
 
 function Install-Nginx ([int]$port, [string]$ver) {
