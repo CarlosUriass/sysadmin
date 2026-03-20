@@ -117,44 +117,56 @@ function Install-IIS ([int]$port, [string]$ver) {
         }
     }
 
-    # 2. Modificar el puerto usando los cmdlets específicos de WebBinding
+    # 2. Modificar el puerto con Bucle de Espera (Wait Loop)
     Import-Module WebAdministration
     
-    # Damos 5 segundos para que Windows termine de asentar los archivos de IIS
-    Start-Sleep 5 
+    $configPath = "$env:SystemRoot\system32\inetsrv\config\applicationHost.config"
+    $locked = $true
+    $retries = 0
+    $maxRetries = 30 # Le damos hasta 60 segundos porque TiWorker puede ser lento
 
+    Log-Info "Esperando a que TiWorker/TrustedInstaller liberen la configuracion..."
+    while ($locked -and $retries -lt $maxRetries) {
+        try {
+            # Intentamos abrir el archivo de forma exclusiva para comprobar el bloqueo
+            $testLock = [System.IO.File]::Open($configPath, 'Open', 'Read', 'None')
+            $testLock.Close()
+            $locked = $false
+            Log-OK "Archivo liberado por el instalador de Windows."
+        } catch {
+            Start-Sleep 2
+            $retries++
+            Write-Host "  -> Archivo bloqueado, reintentando... ($retries/$maxRetries)" -ForegroundColor DarkGray
+        }
+    }
+
+    if ($locked) {
+        Log-Error "Windows no solto el archivo despues de 60 segundos. El servidor podria estar muy saturado."
+        return $false
+    }
+
+    # 3. Aplicar el nuevo puerto
     if (Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue) {
         Log-Info "Cambiando binding al puerto $port..."
-        
         try {
-            # Remover el binding por defecto del puerto 80
             Remove-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -ErrorAction Stop
-            
-            # Agregar el nuevo binding en el puerto elegido
             New-WebBinding -Name "Default Web Site" -Port $port -Protocol "http" -ErrorAction Stop
-            Log-OK "Binding actualizado exitosamente"
+            Log-OK "Binding actualizado exitosamente a $port"
         } catch {
             Log-Warn "Error con WebBinding: $($_.Exception.Message)"
-            Log-Info "Intentando via appcmd..."
-            
-            # Asegurar que WAS corre para usar la API COM y evitar bloqueo de archivo
-            Start-Service WAS -ErrorAction SilentlyContinue 
-            $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
-            $out = & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1
-            if ($LASTEXITCODE -ne 0) { Log-Warn "appcmd output: $out" }
         }
-
-        # Asegurar que los servicios y el sitio web están arriba
+        
+        # Reiniciar servicios para asentar configuracion
         Start-Service WAS, W3SVC -ErrorAction SilentlyContinue
         Start-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
     } else {
         Log-Warn "No se encontro 'Default Web Site'. Verifica la instalacion."
     }
 
-    # 3. Pagina de prueba
+    # 4. Pagina de prueba
     Write-IndexHtml -path "C:\inetpub\wwwroot\index.html" -svc "IIS" -ver $ver -port $port
 
-    # 4. Validar
+    # 5. Validar
     if (Test-PortInUse $port) {
         Log-OK "IIS escuchando en puerto $port"
         return $true
