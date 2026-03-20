@@ -69,7 +69,7 @@ function Write-IndexHtml ([string]$path, [string]$svc, [string]$ver, [int]$port)
     $dir = Split-Path $path -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $html = "<html><body><h1>$svc $ver — Puerto $port</h1><p>$ts</p></body></html>"
+    $html = "<html><body><h1>$svc $ver - Puerto $port</h1><p>$ts</p></body></html>"
     [IO.File]::WriteAllText($path, $html, [Text.UTF8Encoding]::new($false))
     Log-OK "index.html -> $path"
 }
