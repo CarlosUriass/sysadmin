@@ -130,17 +130,13 @@ function Set-ServiceUserAndPermissions {
 }
 
 function Stop-IISServices {
-    Write-LogInfo "Deteniendo WAS y W3SVC..."
-    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
-    Stop-Service WAS   -Force -ErrorAction SilentlyContinue
-    $deadline = (Get-Date).AddSeconds(15)
-    while ((Get-Date) -lt $deadline) {
-        $w3  = (Get-Service W3SVC -ErrorAction SilentlyContinue).Status
-        $was = (Get-Service WAS   -ErrorAction SilentlyContinue).Status
-        if ($w3 -ne 'Running' -and $was -ne 'Running') { break }
-        Start-Sleep -Milliseconds 500
-    }
-    Start-Sleep -Seconds 1
+    Write-LogInfo "Deteniendo IIS (iisreset /stop)..."
+    # iisreset /stop termina TODOS los procesos IIS (w3wp, WAS, W3SVC)
+    # garantizando que applicationHost.config quede desbloqueado
+    iisreset /stop /noforce 2>&1 | Out-Null
+    # Matar procesos residuales por si acaso
+    Stop-Process -Name 'w3wp','inetinfo' -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3  # Dar tiempo al OS para liberar file handles
 }
 function Start-IISServices {
     Write-LogInfo "Iniciando IIS (iisreset /start)..."
@@ -172,7 +168,9 @@ function Apply-IISHardening ([int]$Port) {
     Write-LogInfo "web.config escrito."
 
     # 3. Cambiar binding via appcmd ANTES de arrancar IIS
-    #    appcmd escribe errores en stdout (no stderr), capturar siempre
+    #    Esperar extra para asegurar que el OS libero el file handle de applicationHost.config
+    Write-LogInfo "Esperando liberacion de locks en applicationHost.config..."
+    Start-Sleep -Seconds 3
     $appcmdOut = & $appcmd set site "Default Web Site" /bindings:"http/*:${Port}:" 2>&1
     if ($appcmdOut -match 'ERROR' -or $LASTEXITCODE -ne 0) {
         Write-LogWarn "appcmd binding fallo: $appcmdOut"
