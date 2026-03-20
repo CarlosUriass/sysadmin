@@ -108,20 +108,18 @@ function Install-IIS ([int]$port, [string]$ver) {
     Stop-Service W3SVC,WAS,AppHostSvc -Force -ErrorAction SilentlyContinue
     Start-Sleep 3
 
-    # 3. Cambiar puerto via appcmd
-    #    AppHostSvc debe estar corriendo para que appcmd escriba via COM (no file I/O)
+    # 3. Cambiar puerto via appcmd (Requiere WAS para la API COM de configuracion)
     $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
     if (Test-Path $appcmd) {
-        Start-Service AppHostSvc -ErrorAction SilentlyContinue
+        Start-Service WAS -ErrorAction SilentlyContinue
         Start-Sleep 2
+        
         $out = & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1
         if ($LASTEXITCODE -eq 0) {
             Log-Info "Binding IIS configurado al puerto $port"
         } else {
             Log-Warn "appcmd binding: $out"
         }
-        Stop-Service AppHostSvc -Force -ErrorAction SilentlyContinue
-        Start-Sleep 1
     } else {
         Log-Warn "appcmd.exe no encontrado - el binding se mantiene en el default"
     }
@@ -129,10 +127,10 @@ function Install-IIS ([int]$port, [string]$ver) {
     # 4. Pagina de prueba
     Write-IndexHtml -path "C:\inetpub\wwwroot\index.html" -svc "IIS" -ver $ver -port $port
 
-    # 5. Arrancar en orden: AppHostSvc -> WAS -> W3SVC
+    # 5. Arrancar en orden
     Start-Service AppHostSvc -ErrorAction SilentlyContinue; Start-Sleep 1
-    Start-Service WAS         -ErrorAction SilentlyContinue; Start-Sleep 1
-    Start-Service W3SVC       -ErrorAction SilentlyContinue; Start-Sleep 4
+    Start-Service WAS        -ErrorAction SilentlyContinue; Start-Sleep 1
+    Start-Service W3SVC      -ErrorAction SilentlyContinue; Start-Sleep 4
 
     if (Test-PortInUse $port) {
         Log-OK "IIS escuchando en puerto $port"
@@ -277,7 +275,7 @@ function Install-Nginx ([int]$port, [string]$ver) {
     $c = Get-Content $conf -Raw
 
     # Solo cambiar el puerto de escucha
-    $c = $c -replace '(?m)(listen\s+)\d+(;)',        ('$1' + $port + '$2')
+    $c = $c -replace '(?m)(listen\s+)\d+(;)',       ('$1' + $port + '$2')
     $c = $c -replace '(?m)(listen\s+\[::\]:)\d+(;)', ('$1' + $port + '$2')
 
     [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
