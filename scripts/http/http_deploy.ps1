@@ -151,23 +151,28 @@ function Apply-IISHardening ([int]$Port) {
     Write-LogInfo "Aplicando Hardening a IIS..."
     Import-Module WebAdministration -ErrorAction Stop
     $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
-    Stop-IISServices
-    Start-IISServices
 
-    # Preparar wwwroot y web.config ANTES de manipular bindings
+    # 1. Detener IIS completamente
+    Stop-IISServices
+
+    # 2. Preparar wwwroot y web.config con IIS detenido
     $webDir = "C:\inetpub\wwwroot"
     if (-not (Test-Path $webDir)) { New-Item -ItemType Directory -Path $webDir -Force | Out-Null }
     $wc = '<?xml version="1.0" encoding="UTF-8"?><configuration><system.webServer><httpProtocol><customHeaders><clear /><remove name="X-Powered-By" /><add name="X-Frame-Options" value="SAMEORIGIN" /><add name="X-Content-Type-Options" value="nosniff" /></customHeaders></httpProtocol><security><requestFiltering removeServerHeader="true"><verbs allowUnlisted="true"><clear /><add verb="TRACE" allowed="false" /><add verb="TRACK" allowed="false" /></verbs></requestFiltering></security></system.webServer></configuration>'
     [System.IO.File]::WriteAllText("$webDir\web.config", $wc, [System.Text.UTF8Encoding]::new($false))
     Write-LogInfo "web.config escrito."
 
-    # Cambiar binding via appcmd (evita el bug de AppendChild sobre XmlElement vacio)
+    # 3. Cambiar binding via appcmd ANTES de arrancar IIS
+    #    appcmd solo edita applicationHost.config; no necesita que IIS este corriendo
     try {
         & $appcmd set site "Default Web Site" /bindings:"http/*:${Port}:" | Out-Null
         Write-LogInfo "Binding IIS -> puerto $Port"
     } catch {
         Write-LogWarn "appcmd binding: $_"
     }
+
+    # 4. Arrancar IIS ya con el puerto correcto en la config
+    Start-IISServices
 }
 
 function Set-FirewallRule ([int]$Port, [string]$Svc) {
