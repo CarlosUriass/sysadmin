@@ -143,8 +143,17 @@ function Stop-IISServices {
     Start-Sleep -Seconds 1
 }
 function Start-IISServices {
-    Start-Service WAS   -ErrorAction SilentlyContinue; Start-Sleep 1
-    Start-Service W3SVC -ErrorAction SilentlyContinue; Start-Sleep 3
+    Write-LogInfo "Iniciando IIS (iisreset /start)..."
+    $r = iisreset /start 2>&1
+    Start-Sleep -Seconds 3
+    $w3Status = (Get-Service W3SVC -ErrorAction SilentlyContinue).Status
+    $wasStatus = (Get-Service WAS  -ErrorAction SilentlyContinue).Status
+    if ($w3Status -eq 'Running') {
+        Write-LogInfo "W3SVC: Running | WAS: $wasStatus"
+    } else {
+        Write-LogWarn "W3SVC: $w3Status | WAS: $wasStatus"
+        Write-LogWarn "iisreset output: $r"
+    }
 }
 
 function Apply-IISHardening ([int]$Port) {
@@ -163,12 +172,12 @@ function Apply-IISHardening ([int]$Port) {
     Write-LogInfo "web.config escrito."
 
     # 3. Cambiar binding via appcmd ANTES de arrancar IIS
-    #    appcmd solo edita applicationHost.config; no necesita que IIS este corriendo
-    try {
-        & $appcmd set site "Default Web Site" /bindings:"http/*:${Port}:" | Out-Null
-        Write-LogInfo "Binding IIS -> puerto $Port"
-    } catch {
-        Write-LogWarn "appcmd binding: $_"
+    #    appcmd escribe errores en stdout (no stderr), capturar siempre
+    $appcmdOut = & $appcmd set site "Default Web Site" /bindings:"http/*:${Port}:" 2>&1
+    if ($appcmdOut -match 'ERROR' -or $LASTEXITCODE -ne 0) {
+        Write-LogWarn "appcmd binding fallo: $appcmdOut"
+    } else {
+        Write-LogInfo "Binding IIS -> puerto $Port | appcmd: $appcmdOut"
     }
 
     # 4. Arrancar IIS ya con el puerto correcto en la config
@@ -208,12 +217,23 @@ function Install-IIS ([int]$Port, [string]$Version) {
             Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart | Out-Null
         }
     }
-    Start-Service WAS   -ErrorAction SilentlyContinue; Start-Sleep 1
-    Start-Service W3SVC -ErrorAction SilentlyContinue; Start-Sleep 4
     Apply-IISHardening -Port $Port
     Generate-IndexHtml -Path "C:\inetpub\wwwroot\index.html" -Svc "IIS" -Ver $Version -Port $Port
     Set-ServiceUserAndPermissions -ServiceName "iis" -Path "C:\inetpub\wwwroot"
-    return $true
+
+    # Verificar que IIS realmente escucha en el puerto
+    Start-Sleep -Seconds 2
+    if (Test-PortInUse -Port $Port) {
+        Write-LogSuccess "IIS escuchando en puerto $Port (verificado)"
+        return $true
+    } else {
+        Write-LogError "IIS NO escucha en puerto $Port tras el despliegue."
+        Write-LogError "Estado: W3SVC=$((Get-Service W3SVC -EA SilentlyContinue).Status) | WAS=$((Get-Service WAS -EA SilentlyContinue).Status)"
+        # Mostrar ultimas entradas del log de eventos de IIS
+        $evts = Get-WinEvent -LogName 'System' -MaxEvents 5 -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -match 'IIS|W3SVC|WAS' }
+        if ($evts) { $evts | ForEach-Object { Write-LogWarn "EventLog: $($_.Message.split("`n")[0])" } }
+        return $false
+    }
 }
 
 function Install-ApacheHTTP ([int]$Port, [string]$Version) {
