@@ -160,28 +160,37 @@ function Apply-IISHardening ([int]$Port) {
     Write-LogInfo "Aplicando Hardening a IIS..."
     $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
 
-    # 1. Detener IIS completamente
-    Stop-IISServices
+    # 1. Asegurar AppHostSvc corriendo (appcmd necesita su COM interface para escribir)
+    if ((Get-Service AppHostSvc -EA SilentlyContinue).Status -ne 'Running') {
+        Start-Service AppHostSvc -ErrorAction SilentlyContinue; Start-Sleep 2
+    }
 
-    # 2. Preparar wwwroot y web.config con IIS detenido
+    # 2. Detener SOLO W3SVC (deja WAS y AppHostSvc arriba para el commit de appcmd)
+    Write-LogInfo "Deteniendo W3SVC para liberar el sitio..."
+    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name 'w3wp' -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+
+    # 3. Cambiar binding con AppHostSvc activo — usa COM interface, NO file I/O directo
+    $appcmdOut = & $appcmd set site "Default Web Site" /bindings:"http/*:${Port}:" 2>&1
+    if ($appcmdOut -match 'ERROR' -or $LASTEXITCODE -ne 0) {
+        Write-LogWarn "appcmd binding fallo: $appcmdOut"
+    } else {
+        Write-LogInfo "Binding IIS -> puerto $Port | $appcmdOut"
+    }
+
+    # 4. Ahora detener todo (AppHostSvc, WAS) para escribir web.config limpio
+    Stop-Service -Name 'AppHostSvc','WAS' -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+
+    # 5. Preparar wwwroot y web.config
     $webDir = "C:\inetpub\wwwroot"
     if (-not (Test-Path $webDir)) { New-Item -ItemType Directory -Path $webDir -Force | Out-Null }
     $wc = '<?xml version="1.0" encoding="UTF-8"?><configuration><system.webServer><httpProtocol><customHeaders><clear /><remove name="X-Powered-By" /><add name="X-Frame-Options" value="SAMEORIGIN" /><add name="X-Content-Type-Options" value="nosniff" /></customHeaders></httpProtocol><security><requestFiltering removeServerHeader="true"><verbs allowUnlisted="true"><clear /><add verb="TRACE" allowed="false" /><add verb="TRACK" allowed="false" /></verbs></requestFiltering></security></system.webServer></configuration>'
     [System.IO.File]::WriteAllText("$webDir\web.config", $wc, [System.Text.UTF8Encoding]::new($false))
     Write-LogInfo "web.config escrito."
 
-    # 3. Cambiar binding via appcmd ANTES de arrancar IIS
-    #    Esperar extra para asegurar que el OS libero el file handle de applicationHost.config
-    Write-LogInfo "Esperando liberacion de locks en applicationHost.config..."
-    Start-Sleep -Seconds 3
-    $appcmdOut = & $appcmd set site "Default Web Site" /bindings:"http/*:${Port}:" 2>&1
-    if ($appcmdOut -match 'ERROR' -or $LASTEXITCODE -ne 0) {
-        Write-LogWarn "appcmd binding fallo: $appcmdOut"
-    } else {
-        Write-LogInfo "Binding IIS -> puerto $Port | appcmd: $appcmdOut"
-    }
-
-    # 4. Arrancar IIS ya con el puerto correcto en la config
+    # 6. Arrancar todo con el binding ya correcto en applicationHost.config
     Start-IISServices
 }
 
