@@ -156,6 +156,65 @@ function Install-IIS ([int]$port, [string]$ver) {
     Log-Error "IIS no responde en puerto $port | W3SVC=$w3 | WAS=$was"
     return $false
 }
+
+# ---------------------------------------------------------------------------
+# APACHE
+# ---------------------------------------------------------------------------
+function Get-ApachePath {
+    $dest = "C:\tools\Apache24"
+    if (Test-Path "$dest\bin\httpd.exe") { return $dest }
+
+    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\apache-httpd\tools"
+    $zip = Get-ChildItem $chocoLib -Filter "httpd-*-x64-*.zip" -EA SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $zip) { $zip = Get-ChildItem $chocoLib -Filter "httpd-*.zip" -EA SilentlyContinue | Select-Object -First 1 }
+    if (-not $zip) { Log-Error "ZIP de Apache no encontrado en $chocoLib"; return $null }
+
+    Log-Info "Extrayendo $($zip.Name)..."
+    New-Item -ItemType Directory "C:\tools" -Force | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    try { [IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, "C:\tools") } catch { Log-Warn "$_" }
+
+    if (Test-Path "$dest\bin\httpd.exe") { return $dest }
+    $found = Get-ChildItem "C:\tools" -Recurse -Filter "httpd.exe" -EA SilentlyContinue | Select-Object -First 1
+    if ($found) { return Split-Path $found.DirectoryName -Parent }
+    return $null
+}
+
+function Install-Apache ([int]$port, [string]$ver) {
+    Log-Info "Instalando Apache $ver en puerto $port..."
+    Ensure-Chocolatey
+    choco install apache-httpd --version=$ver -y --no-progress --force 2>&1 | Out-Null
+
+    $root = Get-ApachePath
+    if (-not $root) { return $false }
+
+    $conf = "$root\conf\httpd.conf"
+    if (-not (Test-Path $conf)) { Log-Error "httpd.conf no encontrado"; return $false }
+
+    $c = Get-Content $conf -Raw
+    $c = $c -replace 'Define SRVROOT "[^"]*"',   'Define SRVROOT "C:/tools/Apache24"'
+    $c = $c -replace '(?<![/\w])/?Apache24/',     'C:/tools/Apache24/'
+    $c = $c -replace '(?m)^Listen\s+\d+$', "Listen $port"
+    [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
+
+    $test = & "$root\bin\httpd.exe" -t 2>&1
+    if ($test -notmatch "Syntax OK") { Log-Error "httpd.conf invalido:`n$test"; return $false }
+
+    if (-not (Test-Path "$root\logs")) { New-Item -ItemType Directory "$root\logs" -Force | Out-Null }
+    Write-IndexHtml -path "$root\htdocs\index.html" -svc "Apache" -ver $ver -port $port
+
+    $svcName = "Apache2.4"
+    if (-not (Get-Service $svcName -EA SilentlyContinue)) {
+        $out = & "$root\bin\httpd.exe" -k install -n $svcName 2>&1
+    }
+    Start-Service $svcName -ErrorAction SilentlyContinue
+    Start-Sleep 3
+
+    if (Test-PortInUse $port) { Log-OK "Apache escuchando en puerto $port"; return $true }
+    
+    Log-Error "Apache no responde en $port"
+    return $false
+}
 # ---------------------------------------------------------------------------
 # NGINX
 # ---------------------------------------------------------------------------
@@ -199,13 +258,9 @@ function Install-Nginx ([int]$port, [string]$ver) {
     $conf = "$root\conf\nginx.conf"
     if (-not (Test-Path $conf)) { Log-Error "nginx.conf no encontrado"; return $false }
 
-    $c = Get-Content $conf -Raw
-    
-    # CORRECCIÓN: Usar ${1} para que no se fusione con el número del puerto
-    $c = $c -replace '(?m)(listen\s+)\d+(;)',        ('${1}' + $port + '$2')
-    $c = $c -replace '(?m)(listen\s+\[::\]:)\d+(;)', ('${1}' + $port + '$2')
-    
-    [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
+    # Simplificar reemplazo para evitar ambigüedad con backreferences ($13000)
+    $c = $c -replace '(?m)listen\s+\d+;',       "listen $port;"
+    $c = $c -replace '(?m)listen\s+\[::\]:\d+;', "listen [::]:$port;"
 
     Write-IndexHtml -path "$root\html\index.html" -svc "Nginx" -ver $ver -port $port
 
