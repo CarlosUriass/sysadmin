@@ -156,6 +156,34 @@ function Install-IIS ([int]$port, [string]$ver) {
     Log-Error "IIS no responde en puerto $port | W3SVC=$w3 | WAS=$was"
     return $false
 }
+# ---------------------------------------------------------------------------
+# NGINX
+# ---------------------------------------------------------------------------
+function Get-NginxPath {
+    $dest = "C:\tools\nginx"
+    if (Test-Path "$dest\nginx.exe") { return $dest }
+
+    $chocoLib = "$env:ALLUSERSPROFILE\chocolatey\lib\nginx\tools"
+    $zip = Get-ChildItem $chocoLib -Filter "nginx-*.zip" -EA SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $zip) { Log-Error "ZIP de Nginx no encontrado en $chocoLib"; return $null }
+
+    Log-Info "Extrayendo $($zip.Name)..."
+    $tmp = "C:\tools\nginx_tmp"
+    New-Item -ItemType Directory $tmp -Force | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    try { [IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, $tmp) } catch { Log-Warn "$_" }
+
+    $inner = Get-ChildItem $tmp -Directory -EA SilentlyContinue | Where-Object { $_.Name -match "^nginx" } | Select-Object -First 1
+    if ($inner -and (Test-Path "$($inner.FullName)\nginx.exe")) {
+        if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+        Move-Item $inner.FullName $dest
+        Remove-Item $tmp -Recurse -Force -EA SilentlyContinue
+        return $dest
+    }
+    $found = Get-ChildItem $tmp -Recurse -Filter "nginx.exe" -EA SilentlyContinue | Select-Object -First 1
+    if ($found) { return $found.DirectoryName }
+    return $null
+}
 
 function Install-Nginx ([int]$port, [string]$ver) {
     Log-Info "Instalando Nginx $ver en puerto $port..."
