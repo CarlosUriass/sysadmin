@@ -69,7 +69,7 @@ function Write-IndexHtml ([string]$path, [string]$svc, [string]$ver, [int]$port)
     $dir = Split-Path $path -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $html = "<html><body><h1>$svc $ver - Puerto $port</h1><p>$ts</p></body></html>"
+    $html = "<html><body><h1>$svc $ver — Puerto $port</h1><p>$ts</p></body></html>"
     [IO.File]::WriteAllText($path, $html, [Text.UTF8Encoding]::new($false))
     Log-OK "index.html -> $path"
 }
@@ -103,17 +103,25 @@ function Install-IIS ([int]$port, [string]$ver) {
         }
     }
 
-    # 2. Asegurar que AppHostSvc esta corriendo (appcmd lo necesita)
-    Start-Service AppHostSvc -ErrorAction SilentlyContinue
-    Start-Sleep 2
+    # 2. Detener IIS completamente antes de tocar el binding
+    iisreset /stop /noforce 2>&1 | Out-Null
+    Stop-Service W3SVC,WAS,AppHostSvc -Force -ErrorAction SilentlyContinue
+    Start-Sleep 3
 
-    # 3. Cambiar puerto via appcmd (sin tocar XMLs a mano)
+    # 3. Cambiar puerto via appcmd
+    #    AppHostSvc debe estar corriendo para que appcmd escriba via COM (no file I/O)
     $appcmd = "$env:SystemRoot\system32\inetsrv\appcmd.exe"
     if (Test-Path $appcmd) {
-        Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
+        Start-Service AppHostSvc -ErrorAction SilentlyContinue
         Start-Sleep 2
-        & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1 | Out-Null
-        Log-Info "Binding IIS configurado al puerto $port"
+        $out = & $appcmd set site "Default Web Site" /bindings:"http/*:${port}:" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Log-Info "Binding IIS configurado al puerto $port"
+        } else {
+            Log-Warn "appcmd binding: $out"
+        }
+        Stop-Service AppHostSvc -Force -ErrorAction SilentlyContinue
+        Start-Sleep 1
     } else {
         Log-Warn "appcmd.exe no encontrado - el binding se mantiene en el default"
     }
@@ -121,11 +129,10 @@ function Install-IIS ([int]$port, [string]$ver) {
     # 4. Pagina de prueba
     Write-IndexHtml -path "C:\inetpub\wwwroot\index.html" -svc "IIS" -ver $ver -port $port
 
-    # 5. Arrancar IIS
-    Start-Service AppHostSvc,WAS -ErrorAction SilentlyContinue
-    Start-Sleep 1
-    iisreset /start 2>&1 | Out-Null
-    Start-Sleep 3
+    # 5. Arrancar en orden: AppHostSvc -> WAS -> W3SVC
+    Start-Service AppHostSvc -ErrorAction SilentlyContinue; Start-Sleep 1
+    Start-Service WAS         -ErrorAction SilentlyContinue; Start-Sleep 1
+    Start-Service W3SVC       -ErrorAction SilentlyContinue; Start-Sleep 4
 
     if (Test-PortInUse $port) {
         Log-OK "IIS escuchando en puerto $port"
@@ -161,8 +168,7 @@ function Get-ApachePath {
     if (Test-Path "$dest\bin\httpd.exe") { return $dest }
     $found = Get-ChildItem "C:\tools" -Recurse -Filter "httpd.exe" -EA SilentlyContinue |
              Select-Object -First 1
-    if ($found) { return Split-Path $found.DirectoryName -Parent }
-    return $null
+    return if ($found) { Split-Path $found.DirectoryName -Parent } else { $null }
 }
 
 function Install-Apache ([int]$port, [string]$ver) {
@@ -251,8 +257,7 @@ function Get-NginxPath {
     }
     $found = Get-ChildItem $tmp -Recurse -Filter "nginx.exe" -EA SilentlyContinue |
              Select-Object -First 1
-    if ($found) { return $found.DirectoryName }
-    return $null
+    return if ($found) { $found.DirectoryName } else { $null }
 }
 
 function Install-Nginx ([int]$port, [string]$ver) {
@@ -270,8 +275,8 @@ function Install-Nginx ([int]$port, [string]$ver) {
     $c = Get-Content $conf -Raw
 
     # Solo cambiar el puerto de escucha
-    $c = $c -replace '(?m)(listen\s+)\d+(;)',        ('$1' + $port + '$2')
-    $c = $c -replace '(?m)(listen\s+\[::\]:)\d+(;)', ('$1' + $port + '$2')
+    $c = $c -replace '(?m)(listen\s+)\d+(;)',         "`${1}${port}`$2"
+    $c = $c -replace '(?m)(listen\s+\[::\]:)\d+(;)',  "`${1}${port}`$2"
 
     [IO.File]::WriteAllText($conf, $c, [Text.UTF8Encoding]::new($false))
 
