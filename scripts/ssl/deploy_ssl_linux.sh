@@ -158,10 +158,13 @@ install_apache_ssl() {
     else
         wait_for_apt_lock
         export DEBIAN_FRONTEND=noninteractive
+        # Purgar cualquier remanente corrupto de instalaciones previas fallidas
+        apt-get purge -y apache2 apache2-utils apache2-bin apache2.2-common >/dev/null 2>&1 || true
+        apt-get autoremove -y >/dev/null 2>&1 || true
+        rm -rf /etc/apache2/mods-* 2>/dev/null || true
+        
         apt-get update -qq
         apt-get install -y apache2 apache2-utils ssl-cert -qq
-        # Reconstruir la lista de módulos en caso de instalaciones previas interrumpidas
-        apt-get install -y --reinstall apache2-bin -qq
     fi
 
     local enable_ssl=0
