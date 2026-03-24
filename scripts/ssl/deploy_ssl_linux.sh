@@ -74,6 +74,24 @@ ask_ssl() {
     fi
 }
 
+ask_ports() {
+    local svc=$1
+    local default_http=$2
+    local default_https=$3
+
+    echo -ne "Ingrese el puerto HTTP deseado para $svc [default: $default_http]: "
+    read -r p_http
+    PORT_HTTP=${p_http:-$default_http}
+
+    if [[ ${enable_ssl:-0} -eq 1 ]]; then
+        echo -ne "Ingrese el puerto HTTPS (SSL) deseado para $svc [default: $default_https]: "
+        read -r p_https
+        PORT_HTTPS=${p_https:-$default_https}
+    else
+        PORT_HTTPS=$default_https
+    fi
+}
+
 # ==============================================================================
 # LÓGICA FTP Y HASH (Integridad)
 # ==============================================================================
@@ -152,12 +170,14 @@ download_from_ftp() {
 install_apache_ssl() {
     log_info "Iniciando instalación de Apache..."
     local source=$1
-    local enable_ssl=0
+    enable_ssl=0
     if ask_ssl "Apache"; then enable_ssl=1; fi
 
-    log_info "Instalando servicio Apache base a través de http_deploy.sh..."
-    # Invocar al script de la Práctica 6 para hacer la instalación limpia y segura
-    bash "$SCRIPT_DIR/../http/http_deploy.sh" apache2
+    ask_ports "Apache" "80" "443"
+
+    log_info "Instalando servicio Apache base a través de http_deploy.sh (Puerto: $PORT_HTTP)..."
+    # Invocar al script de la Práctica 6 con los argumentos correctos
+    bash "$SCRIPT_DIR/../http/http_deploy.sh" --service apache --port "$PORT_HTTP"
 
     # El script instalará Apache por apt (según su lógica default de Web) y lo dejará puro
     # Ahora configuramos el SSL encima
@@ -177,17 +197,17 @@ install_apache_ssl() {
         a2enmod headers
         a2enmod socache_shmcb
 
-        # VirtualHost 80: Redirect to https
+        # VirtualHost HTTP: Redirect to https
         cat <<EOF > /etc/apache2/sites-available/000-default.conf
-<VirtualHost *:80>
+<VirtualHost *:$PORT_HTTP>
     ServerName $DOMAIN
-    Redirect permanent / https://$DOMAIN/
+    Redirect permanent / https://$DOMAIN:$PORT_HTTPS/
 </VirtualHost>
 EOF
 
-        # VirtualHost 443
+        # VirtualHost HTTPS
         cat <<EOF > /etc/apache2/sites-available/default-ssl.conf
-<VirtualHost _default_:443>
+<VirtualHost _default_:$PORT_HTTPS>
     ServerName $DOMAIN
     DocumentRoot /var/www/html
 
@@ -210,25 +230,27 @@ EOF
 install_nginx_ssl() {
     log_info "Iniciando instalación de Nginx..."
     local source=$1
-    local enable_ssl=0
+    enable_ssl=0
     if ask_ssl "Nginx"; then enable_ssl=1; fi
 
-    log_info "Instalando servicio Nginx base a través de http_deploy.sh..."
-    bash "$SCRIPT_DIR/../http/http_deploy.sh" nginx
+    ask_ports "Nginx" "80" "443"
+
+    log_info "Instalando servicio Nginx base a través de http_deploy.sh (Puerto: $PORT_HTTP)..."
+    bash "$SCRIPT_DIR/../http/http_deploy.sh" --service nginx --port "$PORT_HTTP"
 
     if [[ $enable_ssl -eq 1 ]]; then
         log_info "Configurando SSL y forzando HSTS en Nginx..."
         cat <<EOF > /etc/nginx/sites-available/default
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
+    listen $PORT_HTTP default_server;
+    listen [::]:$PORT_HTTP default_server;
     server_name $DOMAIN;
-    return 301 https://\$host\$request_uri;
+    return 301 https://\$host:$PORT_HTTPS\$request_uri;
 }
 
 server {
-    listen 443 ssl http2 default_server;
-    listen [::]:443 ssl http2 default_server;
+    listen $PORT_HTTPS ssl http2 default_server;
+    listen [::]:$PORT_HTTPS ssl http2 default_server;
     server_name $DOMAIN;
 
     ssl_certificate $CERT_FILE;
@@ -250,11 +272,14 @@ EOF
 install_tomcat_ssl() {
     log_info "Iniciando instalación de Tomcat..."
     local source=$1
-    local enable_ssl=0
-    if ask_ssl "Tomcat"; then enable_ssl=1; fi
 
-    log_info "Instalando servicio Tomcat base a través de http_deploy.sh..."
-    bash "$SCRIPT_DIR/../http/http_deploy.sh" tomcat
+    enable_ssl=0
+    if ask_ssl "Tomcat"; then enable_ssl=1; fi
+    
+    ask_ports "Tomcat" "8080" "8443"
+
+    log_info "Instalando servicio Tomcat base a través de http_deploy.sh (Puerto: $PORT_HTTP)..."
+    bash "$SCRIPT_DIR/../http/http_deploy.sh" --service tomcat --port "$PORT_HTTP"
 
     if [[ $enable_ssl -eq 1 ]]; then
         log_info "Configurando SSL en Tomcat (generando Keystore desde PEM)..."
@@ -265,12 +290,12 @@ install_tomcat_ssl() {
         # En caso de instalación apt:
         if [[ "$source" != "FTP" ]]; then
             # Modificar server.xml de tomcat9
-            local txt_insert='<Connector port="8443" protocol="org.apache.coyote.http11.Http11NioProtocol" maxThreads="150" SSLEnabled="true" scheme="https" secure="true" keystoreFile="'$pkcs12_file'" keystorePass="changeit" clientAuth="false" sslProtocol="TLS" />'
+            local txt_insert='<Connector port="'$PORT_HTTPS'" protocol="org.apache.coyote.http11.Http11NioProtocol" maxThreads="150" SSLEnabled="true" scheme="https" secure="true" keystoreFile="'$pkcs12_file'" keystorePass="changeit" clientAuth="false" sslProtocol="TLS" />'
             sed -i '/<Service name="Catalina">/a '"$txt_insert"'' /etc/tomcat9/server.xml
             systemctl restart tomcat9
         else
             # Modificar server.xml de tomcat tarball
-            local txt_insert='<Connector port="8443" protocol="org.apache.coyote.http11.Http11NioProtocol" maxThreads="150" SSLEnabled="true" scheme="https" secure="true" keystoreFile="'$pkcs12_file'" keystorePass="changeit" clientAuth="false" sslProtocol="TLS" />'
+            local txt_insert='<Connector port="'$PORT_HTTPS'" protocol="org.apache.coyote.http11.Http11NioProtocol" maxThreads="150" SSLEnabled="true" scheme="https" secure="true" keystoreFile="'$pkcs12_file'" keystorePass="changeit" clientAuth="false" sslProtocol="TLS" />'
             sed -i '/<Service name="Catalina">/a '"$txt_insert"'' /opt/tomcat/conf/server.xml
             /opt/tomcat/bin/catalina.sh start
         fi
