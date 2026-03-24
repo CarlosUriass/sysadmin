@@ -159,8 +159,7 @@ install_apache_ssl() {
         wait_for_apt_lock
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
-        apt-get install -y apache2 -qq
-        apt-get install -y ssl-cert -qq || true
+        apt-get install -y apache2 apache2-utils ssl-cert -qq
     fi
 
     local enable_ssl=0
@@ -168,10 +167,17 @@ install_apache_ssl() {
 
     if [[ $enable_ssl -eq 1 ]]; then
         log_info "Configurando SSL y forzando HSTS en Apache..."
-        sleep 2
-        /usr/sbin/a2enmod ssl || apt-get install -y --reinstall apache2-bin
-        /usr/sbin/a2enmod rewrite
-        /usr/sbin/a2enmod headers
+        
+        # Forzar activación manual de los módulos saltando dependencias rotas de mods-available
+        mkdir -p /etc/apache2/mods-enabled
+        ln -sf /etc/apache2/mods-available/ssl.conf /etc/apache2/mods-enabled/ssl.conf
+        ln -sf /etc/apache2/mods-available/ssl.load /etc/apache2/mods-enabled/ssl.load
+        ln -sf /etc/apache2/mods-available/rewrite.load /etc/apache2/mods-enabled/rewrite.load
+        ln -sf /etc/apache2/mods-available/headers.load /etc/apache2/mods-enabled/headers.load
+        ln -sf /etc/apache2/mods-available/socache_shmcb.load /etc/apache2/mods-enabled/socache_shmcb.load
+        
+        # Ejecutar los comandos a nivel sistema en caso de que falten dependencias
+        a2enmod ssl rewrite headers socache_shmcb || true
 
         # VirtualHost 80: Redirect to https
         cat <<EOF > /etc/apache2/sites-available/000-default.conf
@@ -194,7 +200,8 @@ EOF
     Header always set Strict-Transport-Security "max-age=63072000; includeSubdomains;"
 </VirtualHost>
 EOF
-        a2ensite default-ssl
+        # Habilitar el sitio
+        a2ensite default-ssl || true
     fi
 
     systemctl restart apache2
