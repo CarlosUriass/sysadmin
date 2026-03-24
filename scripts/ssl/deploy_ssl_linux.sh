@@ -150,27 +150,20 @@ download_from_ftp() {
 install_apache_ssl() {
     log_info "Iniciando instalación de Apache..."
     local source=$1
-    if [[ "$source" == "FTP" ]]; then
-        local package_path
-        package_path=$(download_from_ftp "Apache" "http") || return 1
-        wait_for_apt_lock
-        dpkg -i "$package_path" || apt-get install -f -y
-    else
-        wait_for_apt_lock
-        export DEBIAN_FRONTEND=noninteractive
-        # Purgar cualquier remanente corrupto de instalaciones previas fallidas
-        apt-get purge -y apache2 apache2-utils apache2-bin apache2.2-common >/dev/null 2>&1 || true
-        apt-get autoremove -y >/dev/null 2>&1 || true
-        rm -rf /etc/apache2/mods-* 2>/dev/null || true
-        
-        apt-get update -qq
-        apt-get install -y apache2 apache2-utils ssl-cert -qq
-    fi
-
     local enable_ssl=0
     if ask_ssl "Apache"; then enable_ssl=1; fi
 
+    log_info "Instalando servicio Apache base a través de http_deploy.sh..."
+    # Invocar al script de la Práctica 6 para hacer la instalación limpia y segura
+    bash "$SCRIPT_DIR/../http/http_deploy.sh" apache2
+
+    # El script instalará Apache por apt (según su lógica default de Web) y lo dejará puro
+    # Ahora configuramos el SSL encima
+
     if [[ $enable_ssl -eq 1 ]]; then
+        # Aseguramos dependencias extra de certificados por si http_deploy no las puso
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y ssl-cert apache2-utils >/dev/null 2>&1 || true
         log_info "Configurando SSL y forzando HSTS en Apache..."
         
         # Limpiar symlinks rotos previos
@@ -215,20 +208,11 @@ EOF
 install_nginx_ssl() {
     log_info "Iniciando instalación de Nginx..."
     local source=$1
-    if [[ "$source" == "FTP" ]]; then
-        local package_path
-        package_path=$(download_from_ftp "Nginx" "http") || return 1
-        wait_for_apt_lock
-        dpkg -i "$package_path" || apt-get install -f -y
-    else
-        wait_for_apt_lock
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y nginx -qq
-    fi
-
     local enable_ssl=0
     if ask_ssl "Nginx"; then enable_ssl=1; fi
+
+    log_info "Instalando servicio Nginx base a través de http_deploy.sh..."
+    bash "$SCRIPT_DIR/../http/http_deploy.sh" nginx
 
     if [[ $enable_ssl -eq 1 ]]; then
         log_info "Configurando SSL y forzando HSTS en Nginx..."
@@ -264,29 +248,11 @@ EOF
 install_tomcat_ssl() {
     log_info "Iniciando instalación de Tomcat..."
     local source=$1
-    wait_for_apt_lock
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y default-jdk -qq
-
-    local tomcat_tar=""
-    if [[ "$source" == "FTP" ]]; then
-        tomcat_tar=$(download_from_ftp "Tomcat" "http") || return 1
-        tar -xzf "$tomcat_tar" -C /opt/
-        # Asumiendo que se extrae en algo tipo /opt/apache-tomcat-10.x.x
-        local extracted_dir=$(find /opt -maxdepth 1 -name "apache-tomcat-*" -type d | head -n 1)
-        if [[ -z "$extracted_dir" ]]; then
-             log_error "No se encontró el directorio de tomcat extraido."
-             return 1
-        fi
-        mv "$extracted_dir" /opt/tomcat
-    else
-        apt-get install -y tomcat9 tomcat9-admin -qq
-        # En ubuntu apt instala tomcat9
-    fi
-
     local enable_ssl=0
     if ask_ssl "Tomcat"; then enable_ssl=1; fi
+
+    log_info "Instalando servicio Tomcat base a través de http_deploy.sh..."
+    bash "$SCRIPT_DIR/../http/http_deploy.sh" tomcat
 
     if [[ $enable_ssl -eq 1 ]]; then
         log_info "Configurando SSL en Tomcat (generando Keystore desde PEM)..."
