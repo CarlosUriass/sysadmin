@@ -160,6 +160,7 @@ install_apache_ssl() {
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
         apt-get install -y apache2 -qq
+        apt-get install -y ssl-cert -qq || true
     fi
 
     local enable_ssl=0
@@ -167,9 +168,10 @@ install_apache_ssl() {
 
     if [[ $enable_ssl -eq 1 ]]; then
         log_info "Configurando SSL y forzando HSTS en Apache..."
-        a2enmod ssl
-        a2enmod rewrite
-        a2enmod headers
+        sleep 2
+        /usr/sbin/a2enmod ssl || apt-get install -y --reinstall apache2-bin
+        /usr/sbin/a2enmod rewrite
+        /usr/sbin/a2enmod headers
 
         # VirtualHost 80: Redirect to https
         cat <<EOF > /etc/apache2/sites-available/000-default.conf
