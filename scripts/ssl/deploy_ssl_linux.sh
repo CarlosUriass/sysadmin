@@ -9,7 +9,7 @@ set -euo pipefail
 # ==============================================================================
 # VARIABLES GLOBALES
 # ==============================================================================
-FTP_SERVER="192.168.1.100" # Ajustar a la IP real del servidor FTP
+FTP_SERVER="192.168.100.11" # Ajustar a la IP real del servidor FTP
 FTP_USER="usuario"
 FTP_PASS="pass"
 DOMAIN="www.reprobados.com"
