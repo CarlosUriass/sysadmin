@@ -9,7 +9,7 @@ set -euo pipefail
 # ==============================================================================
 # VARIABLES GLOBALES
 # ==============================================================================
-FTP_SERVER="192.168.100.11" # Ajustar a la IP real del servidor FTP
+FTP_SERVER="192.168.100.11"
 FTP_USER="usuario"
 FTP_PASS="pass"
 DOMAIN="www.reprobados.com"
@@ -327,6 +327,8 @@ install_vsftpd_ssl() {
         grep -q "^force_local_logins_ssl=" /etc/vsftpd.conf || echo "force_local_logins_ssl=YES" >> /etc/vsftpd.conf
         grep -q "^require_ssl_reuse=" /etc/vsftpd.conf || echo "require_ssl_reuse=NO" >> /etc/vsftpd.conf
         grep -q "^ssl_ciphers=" /etc/vsftpd.conf || echo "ssl_ciphers=HIGH" >> /etc/vsftpd.conf
+        grep -q "^seccomp_sandbox=" /etc/vsftpd.conf || echo "seccomp_sandbox=NO" >> /etc/vsftpd.conf
+        grep -q "^strict_ssl_read_eof=" /etc/vsftpd.conf || echo "strict_ssl_read_eof=NO" >> /etc/vsftpd.conf
     fi
 
     systemctl restart vsftpd
