@@ -201,7 +201,7 @@ install_apache_ssl() {
         cat <<EOF > /etc/apache2/sites-available/000-default.conf
 <VirtualHost *:$PORT_HTTP>
     ServerName $DOMAIN
-    Redirect permanent / https://$DOMAIN:$PORT_HTTPS/
+    Redirect permanent / https://$FTP_SERVER:$PORT_HTTPS/
 </VirtualHost>
 EOF
 
@@ -245,7 +245,7 @@ server {
     listen $PORT_HTTP default_server;
     listen [::]:$PORT_HTTP default_server;
     server_name $DOMAIN;
-    return 301 https://\$host:$PORT_HTTPS\$request_uri;
+    return 301 https://$FTP_SERVER:$PORT_HTTPS\$request_uri;
 }
 
 server {
