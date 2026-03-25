@@ -36,6 +36,9 @@ NETPLAN_DIR="/etc/netplan"
 if [[ -d "$NETPLAN_DIR" ]]; then
     netplan_file=$(find "$NETPLAN_DIR" -name "*.yaml" -type f | head -1)
     if [[ -n "$netplan_file" ]]; then
+        # Extraer el renderer original (si existía) para evitar conflictos con NetworkManager/networkd
+        render_line=$(grep -i "renderer:" "$netplan_file" | head -1)
+        
         cp "$netplan_file" "${netplan_file}.bak.$(date +%s)"
         
         # Obtener default_iface. Si está vacía o es la que vamos a editar, no la ponemos duplicada
@@ -44,7 +47,13 @@ if [[ -d "$NETPLAN_DIR" ]]; then
         cat > "$netplan_file" <<NETEOF
 network:
   version: 2
-  renderer: networkd
+NETEOF
+
+        if [[ -n "$render_line" ]]; then
+            echo "$render_line" >> "$netplan_file"
+        fi
+
+        cat >> "$netplan_file" <<NETEOF
   ethernets:
 NETEOF
         
@@ -66,6 +75,7 @@ NETEOF
         addresses: [127.0.0.1, 8.8.8.8]
 NETEOF
         echo "Aplicando configuracion permanente de Netplan..."
+        chmod 600 "$netplan_file"
         netplan apply || echo "Aviso: netplan apply fallo, revisa sintaxis yaml"
     fi
 else
