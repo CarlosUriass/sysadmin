@@ -75,7 +75,7 @@ function Generate-SslCert {
 
 function Ask-SSL {
     param([string]$Svc)
-    $resp = Read-Host "¿Desea activar SSL en el servicio $Svc? [S/N]"
+    $resp = Read-Host "¿Desea activar SSL en el servicio ${Svc}? [S/N]"
     if ($resp -match "^[Ss]$") {
         Generate-SslCert
         return $true
