@@ -141,7 +141,7 @@ function Download-FromFtp {
         return $null
     }
 
-    Write-Host "Versiones disponibles para $Service:"
+    Write-Host "Versiones disponibles para ${Service}:"
     for ($i = 0; $i -lt $installers.Count; $i++) {
         Write-Host "  $($i+1)) $($installers[$i])"
     }
@@ -256,7 +256,8 @@ function Install-IIS-SSL {
         # Agregar regla HSTS
         $httpProtocol = $xml.SelectSingleNode("//system.webServer/httpProtocol")
         if (-not $httpProtocol) {
-            $sysWeb      = $xml.SelectSingleNode("//configuration") ?? $xml.DocumentElement
+            $sysWeb      = $xml.SelectSingleNode("//configuration")
+        if (-not $sysWeb) { $sysWeb = $xml.DocumentElement }
             $httpProtocol = $xml.CreateElement("httpProtocol")
             $sysWeb.AppendChild($httpProtocol) | Out-Null
         }
@@ -444,7 +445,7 @@ function Main {
     }
 
     Write-Host "============================================================"
-    Write-Host "Fuente de Instalación para $svc:"
+    Write-Host "Fuente de Instalación para ${svc}:"
     Write-Host "  1) WEB (winget / roles de Windows)"
     Write-Host "  2) FTP (Repositorio Privado con validación SHA256)"
     $mOpt   = Read-Host "Seleccione fuente (1-2)"
