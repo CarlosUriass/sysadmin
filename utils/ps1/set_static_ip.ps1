@@ -16,7 +16,7 @@ param (
 
 $iface = Get-NetAdapter -Name $InterfaceName -ErrorAction SilentlyContinue
 if (-not $iface -and $InterfaceName -match '^\d+$') {
-    $iface = Get-NetAdapter -InterfaceIndex [int]$InterfaceName -ErrorAction SilentlyContinue
+    $iface = Get-NetAdapter -InterfaceIndex ([int]$InterfaceName) -ErrorAction SilentlyContinue
 }
 if (-not $iface) {
     Write-Error "No se encontró la interfaz de red '$InterfaceName' (ni por Alias ni por Índice)."
