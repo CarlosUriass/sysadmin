@@ -281,6 +281,133 @@ function Install-IIS-SSL {
 }
 
 # ------------------------------------------------------------------------------
+# Apache
+# ------------------------------------------------------------------------------
+function Install-Apache-SSL {
+    param([string]$Source)
+    Log-Info "Iniciando instalación de Apache..."
+
+    if ($Source -eq "FTP") { Log-Warn "Aviso: la automatización para Apache suele provenir del repositorio WEB oficial." }
+
+    $sslEnabled = Ask-SSL -Svc "Apache"
+    Ask-Ports -Svc "Apache" -DefaultHttp 80 -DefaultHttps 443 -SslEnabled $sslEnabled
+
+    Log-Info "Instalando servicio Apache base mediante http_deploy.ps1..."
+    & "$SCRIPT_DIR\..\http\http_deploy.ps1" -Service apache -Port $script:PORT_HTTP
+
+    if ($sslEnabled) {
+        $apacheConf = "C:\tools\Apache24\conf\httpd.conf"
+        if (Test-Path $apacheConf) {
+            Log-Info "Configurando SSL y forzando HSTS en Apache..."
+            $confContent = Get-Content $apacheConf -Raw
+
+            $confContent = $confContent -replace '#LoadModule ssl_module', 'LoadModule ssl_module'
+            $confContent = $confContent -replace '#LoadModule rewrite_module', 'LoadModule rewrite_module'
+            $confContent = $confContent -replace '#LoadModule headers_module', 'LoadModule headers_module'
+            $confContent = $confContent -replace '#LoadModule socache_shmcb_module', 'LoadModule socache_shmcb_module'
+            $confContent = $confContent -replace '(?s)# --- INIT SSL ---.*# --- END SSL ---', ''
+
+            $cPath = $CERT_FILE -replace "\\", "/"
+            $kPath = $KEY_FILE -replace "\\", "/"
+
+            $vhostSsl = @"
+
+# --- INIT SSL ---
+<VirtualHost *:$($script:PORT_HTTP)>
+    ServerName $DOMAIN
+    Redirect permanent / https://$FTP_SERVER:$($script:PORT_HTTPS)/
+</VirtualHost>
+
+Listen $($script:PORT_HTTPS)
+<VirtualHost _default_:$($script:PORT_HTTPS)>
+    ServerName $DOMAIN
+    DocumentRoot "C:/tools/Apache24/htdocs"
+    SSLEngine on
+    SSLCertificateFile "$cPath"
+    SSLCertificateKeyFile "$kPath"
+    Header always set Strict-Transport-Security "max-age=63072000; includeSubdomains;"
+</VirtualHost>
+# --- END SSL ---
+"@
+            $confContent += $vhostSsl
+            
+            [IO.File]::WriteAllText($apacheConf, $confContent, [Text.UTF8Encoding]::new($false))
+            Restart-Service Apache2.4 -ErrorAction SilentlyContinue
+            Log-Success "Apache configurado con SSL y HSTS."
+        }
+    }
+    Log-Success "Apache instalado y configurado."
+}
+
+# ------------------------------------------------------------------------------
+# Nginx
+# ------------------------------------------------------------------------------
+function Install-Nginx-SSL {
+    param([string]$Source)
+    Log-Info "Iniciando instalación de Nginx..."
+
+    if ($Source -eq "FTP") { Log-Warn "Aviso: la automatización para Nginx suele provenir del repositorio WEB oficial." }
+
+    $sslEnabled = Ask-SSL -Svc "Nginx"
+    Ask-Ports -Svc "Nginx" -DefaultHttp 80 -DefaultHttps 443 -SslEnabled $sslEnabled
+
+    Log-Info "Instalando servicio Nginx base mediante http_deploy.ps1..."
+    & "$SCRIPT_DIR\..\http\http_deploy.ps1" -Service nginx -Port $script:PORT_HTTP
+
+    if ($sslEnabled) {
+        $nginxConf = "C:\tools\nginx\conf\nginx.conf"
+        if (Test-Path $nginxConf) {
+            Log-Info "Configurando SSL y forzando HSTS en Nginx..."
+            
+            $cPath = $CERT_FILE -replace "\\", "/"
+            $kPath = $KEY_FILE -replace "\\", "/"
+
+            $newNginxConf = @"
+worker_processes  1;
+events { worker_connections  1024; }
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile        on;
+    keepalive_timeout  65;
+
+    server {
+        listen       $($script:PORT_HTTP);
+        server_name  $DOMAIN;
+        return 301 https://$FTP_SERVER:$($script:PORT_HTTPS)`$request_uri;
+    }
+
+    server {
+        listen       $($script:PORT_HTTPS) ssl http2;
+        server_name  $DOMAIN;
+
+        ssl_certificate      "$cPath";
+        ssl_certificate_key  "$kPath";
+
+        add_header Strict-Transport-Security "max-age=63072000; includeSubdomains" always;
+
+        location / {
+            root   html;
+            index  index.html index.htm;
+        }
+    }
+}
+"@
+            [IO.File]::WriteAllText($nginxConf, $newNginxConf, [Text.UTF8Encoding]::new($false))
+            
+            Stop-Process -Name nginx -Force -EA SilentlyContinue
+            Start-Sleep 1
+            Push-Location "C:\tools\nginx"
+            Start-Process -FilePath ".\nginx.exe" -NoNewWindow
+            Pop-Location
+            Log-Success "Nginx configurado con SSL y HSTS."
+        }
+    }
+    Log-Success "Nginx instalado y configurado."
+}
+
+# ------------------------------------------------------------------------------
 # Tomcat (igual que en Linux, existe para Windows)
 # ------------------------------------------------------------------------------
 function Install-Tomcat-SSL {
@@ -383,9 +510,9 @@ function Install-FtpServer-SSL {
     } else {
         Log-Info "Activando FTP mediante rol IIS-FTP (Windows Server)..."
         Install-WindowsFeature Web-Ftp-Server -IncludeAllSubFeature -ErrorAction SilentlyContinue | Out-Null
-        # Llamar al script ftp_deploy.ps1 de Práctica anterior
-        if (Test-Path "$SCRIPT_DIR\..\ftp\ftp_deploy.ps1") {
-            & "$SCRIPT_DIR\..\ftp\ftp_deploy.ps1"
+        # Llamar al script ftp.ps1
+        if (Test-Path "$SCRIPT_DIR\..\ftp\ftp.ps1") {
+            & "$SCRIPT_DIR\..\ftp\ftp.ps1"
         }
     }
 
@@ -433,20 +560,24 @@ function Main {
     Write-Host "============================================================" -ForegroundColor White
     Write-Host "Servicios disponibles:"
     Write-Host "  1) IIS       (HTTP/HTTPS - equivalente Apache/Nginx)"
-    Write-Host "  2) Tomcat    (HTTP/HTTPS)"
-    Write-Host "  3) FTP Server (FTPS - equivalente vsftpd)"
+    Write-Host "  2) Apache    (HTTP/HTTPS)"
+    Write-Host "  3) Nginx     (HTTP/HTTPS)"
+    Write-Host "  4) Tomcat    (HTTP/HTTPS)"
+    Write-Host "  5) FTP Server (FTPS - equivalente vsftpd)"
 
-    $sOpt = Read-Host "Seleccione un servicio (1-3)"
+    $sOpt = Read-Host "Seleccione un servicio (1-5)"
     $svc  = switch ($sOpt) {
         "1" { "iis" }
-        "2" { "tomcat" }
-        "3" { "ftp" }
+        "2" { "apache" }
+        "3" { "nginx" }
+        "4" { "tomcat" }
+        "5" { "ftp" }
         default { Log-Error "Opción inválida."; exit 1 }
     }
 
     Write-Host "============================================================"
     Write-Host "Fuente de Instalación para ${svc}:"
-    Write-Host "  1) WEB (winget / roles de Windows)"
+    Write-Host "  1) WEB (winget / roles de Windows / chocolatey)"
     Write-Host "  2) FTP (Repositorio Privado con validación SHA256)"
     $mOpt   = Read-Host "Seleccione fuente (1-2)"
     $source = switch ($mOpt) {
@@ -460,6 +591,8 @@ function Main {
 
     switch ($svc) {
         "iis"    { Install-IIS-SSL    -Source $source }
+        "apache" { Install-Apache-SSL -Source $source }
+        "nginx"  { Install-Nginx-SSL  -Source $source }
         "tomcat" { Install-Tomcat-SSL -Source $source }
         "ftp"    { Install-FtpServer-SSL -Source $source }
     }
