@@ -315,7 +315,7 @@ function Install-Apache-SSL {
 # --- INIT SSL ---
 <VirtualHost *:$($script:PORT_HTTP)>
     ServerName $DOMAIN
-    Redirect permanent / https://$FTP_SERVER:$($script:PORT_HTTPS)/
+    Redirect permanent / https://${FTP_SERVER}:$($script:PORT_HTTPS)/
 </VirtualHost>
 
 Listen $($script:PORT_HTTPS)
@@ -375,7 +375,7 @@ http {
     server {
         listen       $($script:PORT_HTTP);
         server_name  $DOMAIN;
-        return 301 https://$FTP_SERVER:$($script:PORT_HTTPS)`$request_uri;
+        return 301 https://${FTP_SERVER}:$($script:PORT_HTTPS)`$request_uri;
     }
 
     server {
