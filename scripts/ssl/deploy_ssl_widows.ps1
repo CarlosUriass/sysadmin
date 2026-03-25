@@ -57,6 +57,9 @@ function Generate-SslCert {
         Log-Info "Generando certificado autofirmado para $DOMAIN..."
 
         $subj = "/C=MX/ST=Sinaloa/L=Culiacan/O=UAS/OU=FIM/CN=$DOMAIN"
+        $oldEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+
         & $openssl req -x509 -nodes -days 365 -newkey rsa:2048 `
             -keyout $KEY_FILE -out $CERT_FILE `
             -subj $subj 2>$null
@@ -66,6 +69,8 @@ function Generate-SslCert {
             -in $CERT_FILE -inkey $KEY_FILE `
             -out $PFX_FILE `
             -password "pass:$PFX_PASS" 2>$null
+
+        $ErrorActionPreference = $oldEAP
 
         Log-Success "Certificado SSL generado (CRT + KEY + PFX)."
     } else {
@@ -430,11 +435,16 @@ function Install-Tomcat-SSL {
         Log-Info "Configurando SSL en Tomcat (Keystore PKCS12 desde PEM)..."
         $openssl = Test-OpenSSL
 
+        $oldEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        
         $pkcs12File = "$CERT_DIR\tomcat.p12"
         & $openssl pkcs12 -export `
             -in $CERT_FILE -inkey $KEY_FILE `
             -out $pkcs12File -name tomcat `
             -password "pass:$PFX_PASS" 2>$null
+
+        $ErrorActionPreference = $oldEAP
 
         # Detectar server.xml según si es instalación APT-like (winget/msi) o tarball
         $serverXmlPaths = @(
