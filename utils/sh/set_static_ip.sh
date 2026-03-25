@@ -16,15 +16,20 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+if [[ $EUID -ne 0 ]]; then
+   echo "ERROR: Este script debe ejecutarse como root (usa sudo)."
+   exit 1
+fi
+
 if [[ -z "$IFACE" || -z "$IP" ]]; then
-    echo "Faltan parametros. Usa -h para ayuda."
+    echo "Faltan parametros. Uso: $0 -i <interfaz> -ip <ip/mascara>"
     exit 1
 fi
 
 echo "Cambiando IP de $IFACE a $IP ..."
 
-ip addr flush dev "$IFACE" 2>/dev/null || true
-ip addr add "$IP" dev "$IFACE" 2>/dev/null
+ip addr flush dev "$IFACE" || echo "Aviso: no se pudo limpiar la interfaz"
+ip addr add "$IP" dev "$IFACE"
 ip link set "$IFACE" up
 
 NETPLAN_DIR="/etc/netplan"
@@ -33,7 +38,7 @@ if [[ -d "$NETPLAN_DIR" ]]; then
     if [[ -n "$netplan_file" ]]; then
         cp "$netplan_file" "${netplan_file}.bak.$(date +%s)"
         
-        # Necesitamos saber la default_iface para no romper netplan
+        # Obtener default_iface. Si está vacía o es la que vamos a editar, no la ponemos duplicada
         default_iface=$(ip route | awk '/default/ {print $5}' | head -1)
         
         cat > "$netplan_file" <<NETEOF
@@ -41,8 +46,18 @@ network:
   version: 2
   renderer: networkd
   ethernets:
+NETEOF
+        
+        # Si existe default_iface y no es la misma a la que le asignamos IP estática
+        if [[ -n "$default_iface" && "$default_iface" != "$IFACE" ]]; then
+            cat >> "$netplan_file" <<NETEOF
     $default_iface:
       dhcp4: true
+NETEOF
+        fi
+
+        # Agregar nuestra interfaz estática
+        cat >> "$netplan_file" <<NETEOF
     $IFACE:
       addresses:
         - $IP
@@ -50,7 +65,11 @@ network:
       nameservers:
         addresses: [127.0.0.1, 8.8.8.8]
 NETEOF
-        netplan apply 2>/dev/null || echo "Aviso: netplan apply fallo, IP asignada manualmente"
+        echo "Aplicando configuracion permanente de Netplan..."
+        netplan apply || echo "Aviso: netplan apply fallo, revisa sintaxis yaml"
     fi
+else
+    echo "ADVERTENCIA: Netplan no detectado. El cambio de IP (comando 'ip addr') es TEMPORAL y se perdera al reiniciar."
+    echo "Para hacerlo permanente en tu distro, configura NetworkManager (nmcli) o /etc/network/interfaces."
 fi
-echo "IP cambiada a $IP"
+echo "Proceso finalizado."
