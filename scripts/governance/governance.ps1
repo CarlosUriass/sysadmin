@@ -270,13 +270,15 @@ function Configurar-LogonHours {
     # Aplicar a usuarios de cada OU
     $cuatesUsers = Get-ADUser -SearchBase "OU=$OU_CUATES,$baseDN" -Filter * -ErrorAction SilentlyContinue
     foreach ($u in $cuatesUsers) {
-        Set-ADUser -Identity $u -Replace @{ logonhours = $hoursCuates }
+        Set-ADUser -Identity $u -Clear logonhours
+        Set-ADUser -Identity $u -Replace @{ logonhours = [byte[]]$hoursCuates }
         Write-LogInfo "logon hours cuates aplicado: $($u.SamAccountName) (08:00-15:00)"
     }
 
     $noCuatesUsers = Get-ADUser -SearchBase "OU=$OU_NOCUATES,$baseDN" -Filter * -ErrorAction SilentlyContinue
     foreach ($u in $noCuatesUsers) {
-        Set-ADUser -Identity $u -Replace @{ logonhours = $hoursNoCuates }
+        Set-ADUser -Identity $u -Clear logonhours
+        Set-ADUser -Identity $u -Replace @{ logonhours = [byte[]]$hoursNoCuates }
         Write-LogInfo "logon hours no-cuates aplicado: $($u.SamAccountName) (15:00-02:00)"
     }
 
