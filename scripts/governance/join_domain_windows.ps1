@@ -60,6 +60,49 @@ if ($currentDomain -eq $DomainName) {
     exit 0
 }
 
+# --- Configurar DNS para que apunte al Domain Controller ---
+Write-LogInfo "configurando DNS del cliente para resolver el dominio..."
+$serverIP = Read-Host "IP del Domain Controller (servidor)"
+
+# Validar IP
+& "$PSScriptRoot\..\..\utils\ps1\validate_ip.ps1" -IP $serverIP
+if ($LASTEXITCODE -ne 0) {
+    Write-LogError "IP invalida: $serverIP"
+}
+
+# Detectar interfaz activa en la misma subred
+$bestIface = $null
+$adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+foreach ($a in $adapters) {
+    $ip = Get-NetIPAddress -InterfaceAlias $a.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($ip) {
+        $clientPrefix = ($ip.IPAddress.Split('.')[0..2]) -join '.'
+        $serverPrefix = ($serverIP.Split('.')[0..2]) -join '.'
+        if ($clientPrefix -eq $serverPrefix) {
+            $bestIface = $a.Name
+            break
+        }
+    }
+}
+
+if (-not $bestIface) {
+    # Si no hay match de subred, usar la primera interfaz activa
+    $bestIface = ($adapters | Select-Object -First 1).Name
+    Write-LogWarn "no se detecto interfaz en la misma subred, usando: $bestIface"
+}
+
+Write-LogInfo "configurando DNS en interfaz: $bestIface -> $serverIP"
+Set-DnsClientServerAddress -InterfaceAlias $bestIface -ServerAddresses $serverIP
+
+# Verificar resolusion del dominio
+Write-LogInfo "verificando resolucion de $DomainName ..."
+$resolved = Resolve-DnsName -Name $DomainName -ErrorAction SilentlyContinue
+if ($resolved) {
+    Write-LogSuccess "dominio $DomainName resuelto correctamente"
+} else {
+    Write-LogError "no se pudo resolver $DomainName. Verifique la red y que el DC este activo."
+}
+
 # Solicitar credenciales de administrador del dominio
 Write-LogInfo "solicite credenciales de administrador del dominio $DomainName"
 $credential = Get-Credential -Message "Credenciales de administrador para $DomainName"
