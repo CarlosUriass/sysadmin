@@ -315,13 +315,11 @@ function Configurar-GPOCierreSesion {
     Write-LogInfo "clave ForceLogoffWhenHourExpire = 1 configurada"
 
     # Vincular GPO al dominio
-    $linked = Get-GPLink -Target $baseDN -ErrorAction SilentlyContinue |
-              Where-Object { $_.DisplayName -eq $GPO_NAME }
-    if (-not $linked) {
-        New-GPLink -Name $GPO_NAME -Target $baseDN -LinkEnabled Yes
+    try {
+        New-GPLink -Name $GPO_NAME -Target $baseDN -LinkEnabled Yes -ErrorAction Stop
         Write-LogSuccess "GPO vinculada al dominio"
-    } else {
-        Write-LogInfo "GPO ya vinculada"
+    } catch {
+        Write-LogInfo "GPO ya vinculada (o error de vinculacion: $($_.Exception.Message))"
     }
 
     # Forzar actualizacion de politicas
