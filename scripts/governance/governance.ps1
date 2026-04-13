@@ -294,7 +294,7 @@ function Configurar-Cuotas {
     $existing  = Get-SmbShare -Name $shareName -ErrorAction SilentlyContinue
     if (-not $existing) {
         New-SmbShare -Name $shareName -Path $SHARE_ROOT -FullAccess "Everyone" | Out-Null
-        Write-LogSuccess "share creado: \\$env:COMPUTERNAME\$shareName"
+        Write-LogSuccess "share creado: \\${env:COMPUTERNAME}\${shareName}"
     } else {
         Write-LogInfo "share ya existe: $shareName"
     }
@@ -325,15 +325,15 @@ function Configurar-Cuotas {
         # Crear cuota FSRM
         $existingQuota = Get-FsrmQuota -Path $userPath -ErrorAction SilentlyContinue
         if (-not $existingQuota) {
-            New-FsrmQuota -Path $userPath -Size $quotaSize -Description "Cuota $quotaLabel para $sam"
-            Write-LogSuccess "cuota $quotaLabel aplicada: $sam"
+            New-FsrmQuota -Path $userPath -Size $quotaSize -Description "Cuota ${quotaLabel} para ${sam}"
+            Write-LogSuccess "cuota ${quotaLabel} aplicada: ${sam}"
         } else {
             # Actualizar si el tamano cambio
             if ($existingQuota.Size -ne $quotaSize) {
                 Set-FsrmQuota -Path $userPath -Size $quotaSize
-                Write-LogInfo "cuota actualizada a $quotaLabel: $sam"
+                Write-LogInfo "cuota actualizada a ${quotaLabel}: ${sam}"
             } else {
-                Write-LogInfo "cuota ya configurada: $sam ($quotaLabel)"
+                Write-LogInfo "cuota ya configurada: ${sam} (${quotaLabel})"
             }
         }
     }
