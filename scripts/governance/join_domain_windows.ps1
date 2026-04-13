@@ -11,6 +11,8 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$DomainName,
 
+    [switch]$Leave,
+
     [switch]$Help
 )
 
@@ -33,8 +35,9 @@ function Verificar-Administrador {
 # AYUDA
 # ==============================================================================
 if ($Help) {
-    Write-Host "uso: .\join_domain_windows.ps1 [-DomainName <dominio>]"
+    Write-Host "uso: .\join_domain_windows.ps1 [-DomainName <dominio>] [-Leave]"
     Write-Host "  -DomainName   nombre del dominio (ej. laboratorio.local)"
+    Write-Host "  -Leave        salir del dominio y volver a WORKGROUP"
     Write-Host "  -Help         muestra este mensaje"
     exit 0
 }
@@ -45,6 +48,30 @@ if ($Help) {
 Write-Host "=== Union al Dominio - Cliente Windows ===" -ForegroundColor White
 
 Verificar-Administrador
+
+# ==============================================================================
+# SALIR DEL DOMINIO
+# ==============================================================================
+if ($Leave) {
+    Write-Host "=== Salir del Dominio ==="  -ForegroundColor White
+    $currentDomain = (Get-WmiObject Win32_ComputerSystem).Domain
+    if ($currentDomain -eq 'WORKGROUP') {
+        Write-LogInfo "este equipo no esta unido a ningun dominio"
+        exit 0
+    }
+    Write-LogInfo "dominio actual: $currentDomain"
+    Write-LogInfo "solicite credenciales de administrador del dominio"
+    $cred = Get-Credential -Message "Credenciales de admin para salir de $currentDomain"
+    try {
+        Remove-Computer -UnjoinDomainCredential $cred -WorkgroupName "WORKGROUP" -Force -ErrorAction Stop
+        Write-LogSuccess "equipo removido del dominio $currentDomain"
+        Write-LogInfo "reiniciando equipo..."
+        Restart-Computer -Force
+    } catch {
+        Write-LogError "error al salir del dominio: $_"
+    }
+    exit 0
+}
 
 # Solicitar dominio si no se proporciono
 if ([string]::IsNullOrWhiteSpace($DomainName)) {
