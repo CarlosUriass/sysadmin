@@ -92,6 +92,58 @@ function Instalar-Roles {
 }
 
 # ==============================================================================
+# 1b. PROMOCION DE DOMINIO (si aun no es DC)
+# ==============================================================================
+function Promover-Dominio {
+    Write-LogInfo "=== verificando promocion de dominio ==="
+
+    # Verificar si ya es un Domain Controller
+    $adws = Get-Service -Name 'ADWS' -ErrorAction SilentlyContinue
+    if ($adws -and $adws.Status -eq 'Running') {
+        try {
+            $null = Get-ADDomain -ErrorAction Stop
+            Write-LogInfo "servidor ya es Domain Controller"
+            return
+        } catch { }
+    }
+
+    Write-LogWarn "el servidor NO esta promovido como Domain Controller"
+
+    # Solicitar datos del dominio
+    $domName = Read-Host "nombre del dominio a crear (ej. laboratorio.local)"
+    if ([string]::IsNullOrWhiteSpace($domName)) {
+        Write-LogError "nombre de dominio vacio"
+    }
+
+    $netbios = ($domName.Split('.')[0]).ToUpper()
+    Write-LogInfo "NetBIOS name: $netbios"
+
+    # Solicitar password de DSRM
+    $dsrmPass = Read-Host "password de DSRM (Directory Services Restore Mode)" -AsSecureString
+
+    Write-LogInfo "promoviendo servidor a Domain Controller para $domName ..."
+
+    Import-Module ADDSDeployment -ErrorAction Stop
+
+    Install-ADDSForest `
+        -DomainName $domName `
+        -DomainNetbiosName $netbios `
+        -SafeModeAdministratorPassword $dsrmPass `
+        -InstallDns:$true `
+        -CreateDnsDelegation:$false `
+        -DatabasePath "C:\Windows\NTDS" `
+        -LogPath "C:\Windows\NTDS" `
+        -SysvolPath "C:\Windows\SYSVOL" `
+        -NoRebootOnCompletion:$false `
+        -Force:$true
+
+    # Si llega aqui sin reiniciar (poco probable), avisar
+    Write-LogWarn "el servidor debe reiniciarse para completar la promocion"
+    Write-LogWarn "despues del reinicio, ejecute este script nuevamente con: .\governance.ps1 -s"
+    exit 0
+}
+
+# ==============================================================================
 # 2. ESTRUCTURA ORGANIZATIVA (OUs + Usuarios desde CSV)
 # ==============================================================================
 function Crear-EstructuraOU {
@@ -589,8 +641,10 @@ Verificar-Administrador
 
 if ($Install) {
     Instalar-Roles
+    Promover-Dominio
 }
 elseif ($Setup) {
+    Promover-Dominio
     Crear-EstructuraOU
     Configurar-LogonHours
     Configurar-GPOCierreSesion
@@ -605,6 +659,7 @@ elseif ($AppLock) {
 else {
     # Flujo completo
     Instalar-Roles
+    Promover-Dominio
     Crear-EstructuraOU
     Configurar-LogonHours
     Configurar-GPOCierreSesion
