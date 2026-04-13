@@ -588,8 +588,9 @@ function Mostrar-Estado {
     Test-Check "Grupo NoCuates" $grpNOk
 
     # Usuarios
-    $totalCuates   = @(Get-ADUser -SearchBase "OU=$OU_CUATES,$baseDN" -Filter * -ErrorAction SilentlyContinue).Count
-    $totalNoCuates = @(Get-ADUser -SearchBase "OU=$OU_NOCUATES,$baseDN" -Filter * -ErrorAction SilentlyContinue).Count
+    $totalCuates = 0; $totalNoCuates = 0
+    try { $totalCuates   = @(Get-ADUser -SearchBase "OU=$OU_CUATES,$baseDN" -Filter * -ErrorAction Stop).Count } catch { }
+    try { $totalNoCuates = @(Get-ADUser -SearchBase "OU=$OU_NOCUATES,$baseDN" -Filter * -ErrorAction Stop).Count } catch { }
     Test-Check "usuarios en Cuates ($totalCuates)" ($totalCuates -gt 0)
     Test-Check "usuarios en NoCuates ($totalNoCuates)" ($totalNoCuates -gt 0)
 

@@ -42,7 +42,7 @@ if ($Help) {
 # ==============================================================================
 # MAIN
 # ==============================================================================
-Write-Host "=== Union al Dominio — Cliente Windows ===" -ForegroundColor White
+Write-Host "=== Union al Dominio - Cliente Windows ===" -ForegroundColor White
 
 Verificar-Administrador
 
