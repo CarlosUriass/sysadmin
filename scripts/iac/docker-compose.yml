@@ -70,4 +70,3 @@ networks:
     driver: bridge
   red_datos:
     driver: bridge
-    internal: true # Totalmente aislada del exterior
