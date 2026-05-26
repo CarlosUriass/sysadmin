@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # Balanceador de Carga y Frontend (Nginx)
+  proxy:
+    image: nginx:alpine
+    container_name: balanceador_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - red_publica
+      - red_datos
+    restart: always
+
+  # Servidor de Aplicaciones (Secundario)
+  app:
+    image: nginx:alpine
+    container_name: servidor_app
+    expose:
+      - "80" # No expuesto al host, solo accesible a través del balanceador nginx
+    networks:
+      - red_datos
+    restart: always
+
+  # Clúster de Base de Datos
+  db:
+    image: postgres:16-alpine
+    container_name: db_server
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+    ports:
+      - "5432:5432" # Expuesto inicialmente para que el firewall lo bloquee según rúbrica
+    volumes:
+      - bd_persistencia_tarea11:/var/lib/postgresql/data
+    networks:
+      - red_datos
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Panel de Control Administrativo (pgAdmin)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: servidor_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASS}
+    ports:
+      - "5050:80" # Expuesto inicialmente para que el firewall lo bloquee según rúbrica
+    networks:
+      - red_datos
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  bd_persistencia_tarea11:
+    name: bd_persistencia_tarea11
+
+networks:
+  red_publica:
+    driver: bridge
+  red_datos:
+    driver: bridge
+    internal: true # Totalmente aislada del exterior
