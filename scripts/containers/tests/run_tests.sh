@@ -8,8 +8,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Cargar utilidades de logging
-if [[ -f "$SCRIPT_DIR/../../utils/logs/logger.sh" ]]; then
-    source "$SCRIPT_DIR/../../utils/logs/logger.sh"
+if [[ -f "$SCRIPT_DIR/../../../utils/logs/logger.sh" ]]; then
+    source "$SCRIPT_DIR/../../../utils/logs/logger.sh"
 else
     echo "ERROR: No se encuentra utils/logs/logger.sh"
     exit 1
