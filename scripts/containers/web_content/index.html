@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infraestructura Docker</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <h1>Infraestructura Docker</h1>
+    <p class="subtitle">Panel de servicios containerizados</p>
+
+    <div class="cards">
+        <div class="card">
+            <h2>Servidor Web</h2>
+            <p>Nginx (Alpine) — Puerto 80</p>
+            <p>IP: 172.20.0.10 | RAM: 512MB</p>
+        </div>
+        <div class="card">
+            <h2>Base de Datos</h2>
+            <p>PostgreSQL 16 — Puerto 5432</p>
+            <p>IP: 172.20.0.20 | RAM: 512MB</p>
+        </div>
+        <div class="card">
+            <h2>Servidor FTP</h2>
+            <p>vsftpd — Puerto 21</p>
+            <p>IP: 172.20.0.30 | RAM: 256MB</p>
+        </div>
+    </div>
+
+    <!-- SVG: diagrama de red (recurso estatico inline) -->
+    <div class="network">
+        <h2>Red: infra_red (172.20.0.0/16)</h2>
+        <svg viewBox="0 0 500 80" xmlns="http://www.w3.org/2000/svg" class="net-svg">
+            <line x1="40" y1="40" x2="460" y2="40" stroke="#4fc3f7" stroke-width="2" stroke-dasharray="6,3"/>
+            <circle cx="80" cy="40" r="18" fill="#1a237e" stroke="#4fc3f7" stroke-width="2"/>
+            <text x="80" y="44" text-anchor="middle" fill="#4fc3f7" font-size="10">WEB</text>
+            <circle cx="250" cy="40" r="18" fill="#1b5e20" stroke="#66bb6a" stroke-width="2"/>
+            <text x="250" y="44" text-anchor="middle" fill="#66bb6a" font-size="10">DB</text>
+            <circle cx="420" cy="40" r="18" fill="#e65100" stroke="#ffa726" stroke-width="2"/>
+            <text x="420" y="44" text-anchor="middle" fill="#ffa726" font-size="10">FTP</text>
+        </svg>
+    </div>
+
+    <footer>Practica — Migracion a Contenedores Docker</footer>
+
+</body>
+</html>
